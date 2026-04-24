@@ -262,6 +262,32 @@ class ResidualMLP(nn.Module):
         out = self.final(h)
         return out
     
+class KoopmanEncoder(torch.nn.Module):
+        def __init__(self, state_dim, latent_dim, hidden_dim_int, hidden_depth=5):
+            super().__init__()
+            
+            # We ensure the second argument (out_dim) is an INTEGER.
+            # We pass the list of hidden layers to the third argument.
+            self.backbone = ResidualMLP(
+                state_dim,               # in_dim
+                hidden_dim_int,          # out_dim (MUST BE INT)
+                [hidden_dim_int] * hidden_depth # hidden_channels (LIST)
+            )
+            
+            self.fc_mu = torch.nn.Linear(hidden_dim_int, latent_dim)
+            self.fc_logstd = torch.nn.Linear(hidden_dim_int, latent_dim)
+
+        def forward(self, x):
+                h = self.backbone(x)
+                mu = self.fc_mu(h)
+                raw_std_output = self.fc_logstd(h)
+
+                std = torch.nn.functional.softplus(raw_std_output) + 1e-7
+                
+                logstd = torch.log(std)
+                
+                return torch.cat([mu, logstd], dim=-1)
+            
 
 # --------------------
 class LinearMatrix(nn.Module):

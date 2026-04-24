@@ -1,13 +1,15 @@
 # train_koopman_all_systems.py
 
 import os
+import pandas as pd
+from sklearn.preprocessing import StandardScaler
 import torch
 import torch.optim as optim
 from torch.utils.data import DataLoader
 import numpy as np
 from scipy.integrate import odeint
 import matplotlib.pyplot as plt
-
+import joblib
 from systems import SYSTEMS
 from models.models import (
     ResidualMLP,
@@ -78,43 +80,64 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     # 1. Generate Single Trajectory
-    DATASET = "oscillator"
     tensor_train_koopman = False  # Set to True to use TTKoopman, False for LinearMatrix
-    log_name = "Multi_KVAE_3" 
-    system_func = SYSTEMS[DATASET]
-    cfg = SYSTEM_CONFIG[DATASET]
-    init = cfg["init_sampler"]()
+    log_name = "Multi_KVAE_energy" 
 
-    N_traj = 3  # Number of different initial conditions
-    seq_len = 500
-    subseq_len = 200
-    stride = 10
+
+    subseq_len = 24*4
+    stride = 4
     dt = 1
-    t = np.arange(0, seq_len * dt, dt)
-    batch_size = 64
+    batch_size = 64*4
     latent_dim = 265
     tt_rank = 32  # Start small (2, 4, or 8)
     tt_shape = [(10, 10), (10, 10)]
     hidden_dim = 128
-    horizon = 30
+    horizon = 48
 
-    sequences = []
-    for i in range(N_traj):
-        # This samples a DIFFERENT starting point for every trajectory
-        init = cfg["init_sampler"]() 
-        traj = odeint(system_func, init, t).astype(np.float32)
-        sequences.append(traj)
+    # --- Load Data ---
+    START_DATE = "2025-09-01 00:00:00"
+    END_DATE   = "2025-09-30 23:59:59"
+    sensor_data = "A37_data_010925_310126_full"
+    DATASET_PATH = f"data_in/SensorData/{sensor_data}.csv"
+    TARGET_COLS = ["Nint","RHint","Tint","occup"]                
+    TIME_COL = "DateTime"                      
+    
+    # 1. Load Data from CSV
+    df = pd.read_csv(DATASET_PATH)
+    df[TIME_COL] = pd.to_datetime(df[TIME_COL], format='mixed')
+    mask = (df[TIME_COL] >= START_DATE) & (df[TIME_COL] <= END_DATE)
+    df = df.loc[mask].reset_index(drop=True)
 
-    # This now takes windows from ALL 50 trajectories
+    # Create Cyclic Time Features
+    # Hour of day (0-23)
+    df['hour_sin'] = np.sin(2 * np.pi * df[TIME_COL].dt.hour / 24.0)
+    df['hour_cos'] = np.cos(2 * np.pi * df[TIME_COL].dt.hour / 24.0)
+    
+    # Day of week (0-6)
+    df['day_sin'] = np.sin(2 * np.pi * df[TIME_COL].dt.dayofweek / 7.0)
+    df['day_cos'] = np.cos(2 * np.pi * df[TIME_COL].dt.dayofweek / 7.0)
+
+    # Define all columns to be used as state
+    FEATURE_COLS = TARGET_COLS + ['hour_sin', 'hour_cos', 'day_sin', 'day_cos']
+    data_raw = df[FEATURE_COLS].values
+    print("data_raw", data_raw)
+    
+    # --- Scale  ---
+    scaler = StandardScaler()
+    data_scaled = scaler.fit_transform(data_raw)
+
+    state_dim = data_scaled.shape[1]
+    print(f"Loaded data with shape: {data_scaled.shape} (State Dim: {state_dim})")
+
+
+     # --- Split sequences CONFIG ---
+    sequences = [data_scaled] 
     subsequences = split_into_subsequences(sequences, subseq_len=subseq_len, stride=stride)
     loader = DataLoader(SequenceDataset(subsequences), batch_size=batch_size, shuffle=True)
 
     # 2. Models (Note: Use MLP for both for now to ensure rollout manifold is learned)
-    encoder = ResidualMLP(cfg["state_dim"], 2 * latent_dim, [hidden_dim]*3).to(device)
-    decoder = ResidualMLP(latent_dim, cfg["state_dim"], [hidden_dim]*3).to(device)
-   
-    #decoder = LinearMatrix(latent_dim, cfg["state_dim"]).to(device)
-   
+    encoder = ResidualMLP(state_dim, 2 * latent_dim, [128]*3).to(device)
+    decoder = ResidualMLP(latent_dim, state_dim, [128]*3).to(device)
 
     # Replace LinearMatrix with TTKoopman
     if tensor_train_koopman:
@@ -131,7 +154,12 @@ def main():
         lr=1e-3
     )
 
-    logger = InfoVectorLogger(log_dir=f"logs/M{log_name}_{DATASET}")
+    logger = InfoVectorLogger(log_dir=f"logs/{sensor_data}_{log_name}")
+
+    # Save the scaler now
+    scaler_path = os.path.join(logger.log_dir, "scaler.pkl")
+    joblib.dump(scaler, scaler_path)
+    print(f"Scaler saved to {scaler_path}")
 
     # 3. Trainer
     trainer = KoopmanVAETrainer(

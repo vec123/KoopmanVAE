@@ -124,6 +124,13 @@ class KoopmanVAETrainer:
                 
                 if self.global_epoch % self.save_epoch == 0:
                     self.visualize_and_save(X)
+                    
+                    models_to_save = {
+                        "encoder": self.encoder,
+                        "decoder": self.decoder,
+                        "koopman_matrix": self.K
+                    }
+                    self.logger.save_models(models_to_save, step=self.global_epoch)
 
     @torch.no_grad()
     def visualize_and_save(self, X_batch):

@@ -1,3 +1,7 @@
 old_remove
 logs
+data_in
+data_out
+training_data_figures
+training_results
 *__pycache__*

@@ -1,0 +1,149 @@
+import numpy as np
+from scipy.integrate import odeint
+from .controlled_systems import inverted_pendulum_controlled, cartpole_controlled, cartpole_linear
+
+def generate_trajectories_odeint(system_type="pendulum", n_traj=5, seq_len=500, dt=0.02, noise_lvl=0.05, control=True):
+    t = np.linspace(0, seq_len * dt, seq_len)
+    all_x = []
+    all_u = []
+
+    for i in range(n_traj):
+        if system_type == "pendulum":
+            init = [np.random.uniform(-np.pi, np.pi), 0]
+            func = inverted_pendulum_controlled
+            u_scale = 2.0
+        elif system_type == "cartpole":
+            init = [0, 0, 1.57, 0]
+            func = cartpole_controlled
+            u_scale = 10.0
+
+        if control:
+            u_seq = np.repeat(np.random.uniform(-u_scale, u_scale, size=(seq_len//10 + 1)), 10)[:seq_len]
+        else:
+            u_seq = 0*np.repeat(np.random.uniform(-u_scale, u_scale, size=(seq_len//10 + 1)), 10)[:seq_len]
+        
+        traj = [np.array(init)]
+        curr_state = init
+        for step in range(seq_len - 1):
+            # Pass noise levels to the function
+            sol = odeint(func, curr_state, [0, dt], 
+                         args=(u_seq[step], 1.0, 0.1, 0.5, 9.81, 0.1, noise_lvl, noise_lvl))
+            curr_state = sol[-1]
+            traj.append(curr_state)
+            
+        all_x.append(np.array(traj))
+        all_u.append(u_seq.reshape(-1, 1))
+
+    return np.array(all_x), np.array(all_u), t
+
+def generate_trajectories_euler_maruyama(system_type="pendulum", n_traj=5, seq_len=500, 
+                          dt=0.02, noise_lvl=0.05, sub_steps=10, control=True):
+    t = np.linspace(0, seq_len * dt, seq_len)
+    all_x = []
+    all_u = []
+    sub_dt = dt / sub_steps
+
+    for i in range(n_traj):
+        
+        if system_type == "pendulum":
+            init = [np.random.uniform(-np.pi, np.pi), 0.0]
+            func = inverted_pendulum_controlled
+            u_scale = 2.0
+            params = (1.0, 1.0, 9.81, 0.1) 
+            # Ensure noise_lvl is a list for consistency [theta_noise, omega_noise]
+            # Usually we only apply noise to omega (index 1)
+            sigma = [0.0, noise_lvl] if isinstance(noise_lvl, float) else noise_lvl
+        elif system_type == "cartpole":
+            # Define ranges (adjust these based on your needs)
+            pos_range = 0.1    # +/- 0.5 meters
+            vel_range = 0.1    # +/- 0.1 m/s
+            ang_range = 0.2    # +/- 0.2 radians (~11 degrees)
+            ang_vel_range = 0.1 # +/- 0.1 rad/s
+           
+
+            init = [
+                np.random.uniform(-pos_range, pos_range),
+                np.random.uniform(-vel_range, vel_range),
+                1.57 + np.random.uniform(-ang_range, ang_range), # Centered around 1.57
+                np.random.uniform(-ang_vel_range, ang_vel_range)
+            ]
+            
+            #init = [0, 0, 1.57, 0]
+            func = cartpole_controlled
+            u_scale = 15.0
+            params = (1.0, 0.1, 0.5, 9.81, 0.1)
+            # Match noise to [x, x_dot, theta, theta_dot]
+            # If user passed [noise_x, noise_theta], we map to velocity indices 1 and 3
+            if isinstance(noise_lvl, list) and len(noise_lvl) == 2:
+                sigma = [0.0, noise_lvl[0], 0.0, noise_lvl[1]]
+            else:
+                sigma = [0.0, noise_lvl, 0.0, noise_lvl]
+        elif system_type == "cartpole_linear":
+            # Define ranges (adjust these based on your needs)
+            pos_range = 0.1    # +/- 0.5 meters
+            vel_range = 0.1    # +/- 0.1 m/s
+            ang_range = 0.2    # +/- 0.2 radians (~11 degrees)
+            ang_vel_range = 0.1 # +/- 0.1 rad/s
+           
+
+            init = [
+                np.random.uniform(-pos_range, pos_range),
+                np.random.uniform(-vel_range, vel_range),
+                1.57 + np.random.uniform(-ang_range, ang_range), # Centered around 1.57
+                np.random.uniform(-ang_vel_range, ang_vel_range)
+            ]
+            
+            #init = [0, 0, 1.57, 0]
+            func = cartpole_linear
+            u_scale = 15.0
+            params = (1.0, 0.1, 0.5, 9.81, 0.1)
+            # Match noise to [x, x_dot, theta, theta_dot]
+            # If user passed [noise_x, noise_theta], we map to velocity indices 1 and 3
+            if isinstance(noise_lvl, list) and len(noise_lvl) == 2:
+                sigma = [0.0, noise_lvl[0], 0.0, noise_lvl[1]]
+            else:
+                sigma = [0.0, noise_lvl, 0.0, noise_lvl]
+
+
+
+        if control:
+            u_seq = np.zeros(seq_len)
+            current_idx = 0
+            while current_idx < seq_len:
+                # 1. Randomize the length of this pulse (e.g., between 5 and 30 steps)
+                pulse_len = np.random.randint(5, 31) 
+                
+                # 2. Randomize the magnitude
+                u_val = np.random.uniform(-u_scale, u_scale)
+                
+                # 3. Fill the sequence until the pulse ends or we hit seq_len
+                end_idx = min(current_idx + pulse_len, seq_len)
+                u_seq[current_idx:end_idx] = u_val
+                
+                current_idx = end_idx
+        else:
+            u_seq = np.zeros(seq_len)
+        
+        traj = []
+        curr_state = np.array(init, dtype=np.float64)
+        
+        for step in range(seq_len):
+            traj.append(curr_state.copy())
+            
+            if step < seq_len - 1:
+                u_curr = u_seq[step]
+                for _ in range(sub_steps):
+                    # 1. Deterministic Physics (Drift)
+                    derivs = func(curr_state, 0, u_curr, *params, 
+                                  process_noise=[0.0, 0.0], control_noise=0.0)
+                    
+                    # 2. Stochastic Physics (Diffusion)
+                    # np.random.normal(0, sigma) works per-element if sigma is a list
+                    dw = np.random.normal(0, sigma) * np.sqrt(sub_dt)
+                    
+                    curr_state += np.array(derivs) * sub_dt + dw
+            
+        all_x.append(np.array(traj))
+        all_u.append(u_seq.reshape(-1, 1))
+
+    return np.array(all_x), np.array(all_u), t
