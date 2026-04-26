@@ -288,7 +288,26 @@ class KoopmanEncoder(torch.nn.Module):
                 
                 return torch.cat([mu, logstd], dim=-1)
             
+class LinearKoopmanEncoder(torch.nn.Module):
+        def __init__(self, state_dim, latent_dim):
+            super().__init__()
+            
+            # We ensure the second argument (out_dim) is an INTEGER.
+            # We pass the list of hidden layers to the third argument.
+    
+            self.fc_mu = LinearMatrix(state_dim, latent_dim)
+            self.fc_logstd =LinearMatrix(state_dim, latent_dim)
 
+        def forward(self, x):
+                
+                mu = self.fc_mu(x)
+
+                raw_std_output = self.fc_logstd(x)
+                std = torch.nn.functional.softplus(raw_std_output) + 1e-7
+                logstd = torch.log(std)
+                
+                return torch.cat([mu, logstd], dim=-1)
+            
 # --------------------
 class LinearMatrix(nn.Module):
     """

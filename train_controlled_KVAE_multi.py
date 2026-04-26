@@ -10,7 +10,7 @@ import joblib
 
 # Assuming these are in your local project files
 
-from models.models import ResidualMLP, LinearMatrix, TTKoopman, KoopmanEncoder
+from models.models import ResidualMLP, LinearMatrix, TTKoopman, KoopmanEncoder, LinearKoopmanEncoder
 from systems.controlled_simulators import generate_trajectories_euler_maruyama
 from trainers.Controlled_Multi_KVAE_trainer import ControlledKoopmanVAETrainer
 from logger.logger import InfoVectorLogger
@@ -20,45 +20,39 @@ from logger.logger import InfoVectorLogger
 # -------------------------------------------------------
 
 def save_training_trajectories(X_raw, U_raw, labels, dataset_name, save_dir="plots", num_figs=5):
-    """
-    Saves figures showing the trajectories the model is trained on.
-    
-    Args:
-        X_raw: Numpy array of shape [N, T, Dx]
-        U_raw: Numpy array of shape [N, T, Du]
-        labels: List of strings for state labels
-        dataset_name: String name of the dataset (for filenames)
-        save_dir: Directory to save plots
-        num_figs: Number of random trajectories to plot
-    """
     if not os.path.exists(save_dir):
         os.makedirs(save_dir)
 
-    n_traj, T, dx = X_raw.shape
+    n_traj, T_x, dx = X_raw.shape
+    # Get T_u specifically from the control array
+    T_u = U_raw.shape[1]
     du = U_raw.shape[2]
     
-    # Select indices to plot (clamped to available trajectories)
     indices = np.random.choice(n_traj, min(num_figs, n_traj), replace=False)
 
     for idx in indices:
-        # Create a figure with a subplot for each state + one for control
         fig, axes = plt.subplots(dx + du, 1, figsize=(10, 2 * (dx + du)), sharex=True)
         fig.suptitle(f"Training Trajectory {idx} - {dataset_name}", fontsize=14)
 
         # 1. Plot States
         for i in range(dx):
-            axes[i].plot(X_raw[idx, :, i], color='tab:blue', linewidth=1.5)
-            axes[i].set_ylabel(labels[i])
+            # Use the actual length of the state data for the x-axis
+            axes[i].plot(range(T_x), X_raw[idx, :, i], color='tab:blue', linewidth=1.5)
+            # Safe label access
+            label = labels[i] if i < len(labels) else f"State $x_{i}$"
+            axes[i].set_ylabel(label)
             axes[i].grid(True, alpha=0.3)
 
-        # 2. Plot Control (U)
-        # We assume control is the last subplot
+        # 2. Plot Controls
         for j in range(du):
-            ax_u = axes[dx + j]
-            ax_u.step(range(T), U_raw[idx, :, j], color='tab:red', where='post', linewidth=1.5)
+            ax_u = axes[dx + j] # This moves to the 5th and 6th slots
+            ax_u.step(range(T_u), U_raw[idx, :, j], color='tab:red', where='post', linewidth=1.5)
             ax_u.set_ylabel(f"Control $u_{j}$")
-            ax_u.set_xlabel("Time Steps")
             ax_u.grid(True, alpha=0.3)
+                    
+            # Only show "Time Steps" on the very last subplot
+            if j == du - 1:
+                ax_u.set_xlabel("Time Steps")
 
         plt.tight_layout(rect=[0, 0.03, 1, 0.95])
         
@@ -96,15 +90,15 @@ def main():
 
     plot_training_trajs = True
     
-    normalize_scale = True
-    concat_true = False
+    normalize_scale = False
+    concat_true = True
     encode_control = False
     remove_theta_acc = False
 
     # --- Configuration ---
-    DATASET = "cartpole"  # "cartpole" or "inverted_pendulum"
-    log_name = "Linear_controlled_KVAE_v2_test_norm_True_concat_False_free_spectrum"
-    num_epochs = 10000
+    DATASET = "complex_nonlinear_system"  # "cartpole" or "inverted_pendulum"
+    log_name = "Test_underactuated_nonlinear_encoder"
+    num_epochs = 5000
     save_every = 500
 
     n_traj = 100
@@ -114,11 +108,17 @@ def main():
     dt = 0.1
     sub_steps = 10
     batch_size = 64*4
-    latent_dim = 128
-    hidden_dim = 256
+    latent_dim = 32
+    hidden_dim = 128
     horizon = 15
-    control_dim = 1
     
+    
+    log_name = (
+        f"{log_name}_normalized_"
+        f"{normalize_scale}_state_concat_{concat_true}_"
+        f"control_enc_{encode_control}_spec_free_latent_dim_{latent_dim}"
+    )
+
     # New Noise Configuration
     # For cartpole: [x_noise, theta_noise]
     # For pendulum: just a float (applied to omega)
@@ -126,24 +126,54 @@ def main():
 
     # --- System Specific Meta-Setup ---
     if DATASET == "cartpole":
-        state_dim = 4
-        labels = [r"$x$", r"$\dot{x}$", r"$\theta$", r"$\dot{\theta}$"]
-        system_key = "cartpole"
+        state_dim = 5
+        control_dim = 1
+       # labels = [r"$x$", r"$\dot{x}$", r"$\theta$", r"$\dot{\theta}$"]
+        labels = [r"$x$", r"$\dot{x}$", r"$\sin(\theta)$", r"$\cos(\theta)$", r"$\dot{\theta}$"]
+
     elif DATASET == "pendulum":
         state_dim = 2
+        control_dim = 1
         labels = [r"$\theta$", r"$\omega$"]
-        system_key = "pendulum" 
+
     elif DATASET == "cartpole_linear":
         state_dim = 4
+        control_dim = 1
         labels = [r"$x$", r"$\dot{x}$", r"$\theta$", r"$\dot{\theta}$"]
-        system_key = "cartpole_linear" 
+
+    elif DATASET == "simple_independent_linear":
+        state_dim = 4
+        control_dim = 2
+        labels = [r"$x$", r"$\dot{x}$", r"$z$", r"$\dot{z}$"]
+
+    elif DATASET == "simple_nonlinear_spring":
+        state_dim = 2
+        control_dim = 1
+        # Only two labels needed: position and velocity
+        labels = [r"$x$", r"$\dot{x}$"]
+
+    elif DATASET == "complex_nonlinear_system":
+        # System has two masses, each with position and velocity
+        state_dim = 4
+        control_dim = 1 # Force can be applied to mass 1 and mass 2
+        
+        # Labels for mass 1 and mass 2
+        labels = [
+            r"$x_1$",      # Position Mass 1
+            r"$\dot{x}_1$", # Velocity Mass 1
+            r"$x_2$",      # Position Mass 2
+            r"$\dot{x}_2$"  # Velocity Mass 2
+        ]
+
+
+
 
     # --- 1. Generate Data using Euler-Maruyama ---
     print(f"Generating {n_traj} trajectories for {DATASET} via Euler-Maruyama...")
     
     # We use your imported EM function which handles the internal loop and sub-stepping
     X_raw, U_raw, t_axis = generate_trajectories_euler_maruyama(
-        system_type=system_key,
+        system_type=DATASET,
         n_traj=n_traj,
         seq_len=seq_len,
         dt=dt,
@@ -151,6 +181,44 @@ def main():
         sub_steps=sub_steps,
         control=True
     )
+
+    #  Trigonometric Embedding for Cartpole ---
+    def apply_trigonometric_embedding(X, is_batch=True):
+        """
+        Transforms state from [x, x_dot, theta, theta_dot] 
+        to [x, x_dot, sin(theta), cos(theta), theta_dot].
+        
+        Args:
+            X: np.ndarray of shape (N, T, 4) if is_batch=True, 
+            or (4,) if is_batch=False.
+        Returns:
+            np.ndarray of shape (N, T, 5) or (5,).
+        """
+        if is_batch:
+            # X shape: (N, T, 4)
+            x_pos     = X[:, :, 0:1]
+            x_dot     = X[:, :, 1:2]
+            theta     = X[:, :, 2:3]
+            theta_dot = X[:, :, 3:4]
+            
+            sin_t = np.sin(theta)
+            cos_t = np.cos(theta)
+            
+            return np.concatenate([x_pos, x_dot, sin_t, cos_t, theta_dot], axis=-1)
+        
+        else:
+            # X shape: (4,)
+            x, x_dot, theta, theta_dot = X
+            return np.array([x, x_dot, np.sin(theta), np.cos(theta), theta_dot])
+
+    # --- Usage in your main script ---
+  
+    if DATASET == "cartpole":
+        X_raw = apply_trigonometric_embedding(X_raw, is_batch=True)
+        state_dim = 5
+        labels = [r"$x$", r"$\dot{x}$", r"$\sin(\theta)$", r"$\cos(\theta)$", r"$\dot{\theta}$"]
+
+
     if plot_training_trajs:
         save_training_trajectories(
             X_raw=X_raw, 
@@ -200,8 +268,9 @@ def main():
     x_sub, u_sub = split_into_subsequences_controlled(x_sequences, u_sequences, subseq_len, stride)
     loader = DataLoader(ControlledSequenceDataset(x_sub, u_sub), batch_size=batch_size, shuffle=True)
 
-
-    encoder = KoopmanEncoder(state_dim, latent_dim, hidden_dim).to(device)  
+    #encoder = LinearKoopmanEncoder(state_dim, latent_dim).to(device)  
+    encoder = KoopmanEncoder(state_dim, latent_dim, hidden_dim, hidden_depth=5).to(device)  
+   
 
     if concat_true:
         latent_dim = latent_dim + state_dim 
@@ -234,7 +303,7 @@ def main():
         list(decoder.parameters()) + 
         list(system_matrix.parameters()) + 
         list(control_matrix.parameters()),
-        lr=1e-4
+        lr=1e-3
     )
 
     logger = InfoVectorLogger(log_dir=f"logs/{log_name}_{DATASET}")
@@ -253,19 +322,19 @@ def main():
         horizon=horizon,
         beta=1e-80,          # KL
         gamma_1=10.0,         # koopman dynamics weight in latent space
-        gamma_2=1.0,         # koopman dynamics reconstruction loss weight
+        gamma_2=10.0,         # koopman dynamics reconstruction loss weight
         delta=1.e-10,         # Spectral loss weight
         alpha=0.0,        # Entropy loss weight
         epsilon_1 = 10.00,  #Initial reconstruction loss weight
         epsilon_2 = 0.00,   # All-time reconstruction loss weight
-        zero_structure_gain = 0.01, # Zero-structure loss weight
+        zero_structure_gain = 0.0, # Zero-structure loss weight
         device=device,
         logger=logger,
-        save_epoch=save_every,
-        val_epochs = 100,
+        save_epoch = save_every,
+        val_epochs = save_every,
         stochastic = False,
         concat_true = concat_true,
-        horizon_decay = 0.9
+        horizon_decay = 1
     )
 
     print("Starting Controlled Joint Training...")
