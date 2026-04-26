@@ -4,4 +4,5 @@ data_in
 data_out
 training_data_figures
 training_results
+generated_samples
 *__pycache__*
