@@ -1,14 +1,58 @@
 import numpy as np
 from scipy.integrate import odeint
-from .controlled_systems import (
-    inverted_pendulum_controlled,
-      cartpole_controlled, 
-      cartpole_linear,
-      simple_independent_linear,
-      simple_nonlinear_spring,
-      complex_nonlinear_system)
 
 
+
+def generate_trajectories_euler_maruyama(
+    sys, 
+    n_traj=10, 
+    seq_len=100, 
+    dt=0.02,
+    substeps=5,
+    process_noise=0.01, 
+    control_noise=0.0,
+    control=True
+):
+    inner_dt = dt / substeps
+    sigma_p = sys.get_sigma(process_noise)
+    
+    all_x, all_u = [], []
+    for _ in range(n_traj):
+        state = np.array(sys.get_initial_state())
+        # Ensure raw control is always 2D: (seq_len, control_dim)
+        u_raw_traj = (np.random.rand(seq_len, sys.control_dim) - 0.5) * 2 * sys.u_scale
+        
+        obs_history = []
+        u_applied_history = []
+        
+        for i in range(seq_len):
+            obs_history.append(sys.observe(state))
+            
+            # 1. Format and handle control toggle
+            u_nominal = sys.format_control(u_raw_traj[i])
+            if not control:
+                u_nominal = np.zeros(sys.control_dim) # Use np.zeros to keep dimensions
+            
+            # 2. FORCE u_nominal to be an array so the shape is (control_dim,)
+            u_nominal = np.atleast_1d(u_nominal)
+            u_applied_history.append(u_nominal)
+            
+            # 3. Physics Substepping
+            for _ in range(substeps):
+                u_noisy = u_nominal + np.random.normal(0, control_noise, size=sys.control_dim)
+                derivs = sys.ode(state, i*dt, u_noisy, process_noise=[0]*sys.state_dim)
+                
+                state += np.array(derivs) * inner_dt + sigma_p * np.random.normal(0, np.sqrt(inner_dt), sys.state_dim)
+            
+        all_x.append(np.array(obs_history))
+        all_u.append(np.array(u_applied_history))
+        
+    # Final check: return as (N, T, D)
+    return np.array(all_x), np.array(all_u)
+
+
+
+"""
 def generate_trajectories_odeint(system_type="pendulum", n_traj=5, seq_len=500, dt=0.02, noise_lvl=0.05, control=True):
     t = np.linspace(0, seq_len * dt, seq_len)
     all_x = []
@@ -43,7 +87,7 @@ def generate_trajectories_odeint(system_type="pendulum", n_traj=5, seq_len=500, 
 
     return np.array(all_x), np.array(all_u), t
 
-def generate_trajectories_euler_maruyama(system_type="pendulum", n_traj=5, seq_len=500, 
+def generate_trajectories_euler_maruyama_old(system_type="pendulum", n_traj=5, seq_len=500, 
                           dt=0.02, noise_lvl=0.05, sub_steps=10, control=True):
     t = np.linspace(0, seq_len * dt, seq_len)
     all_x = []
@@ -173,7 +217,68 @@ def generate_trajectories_euler_maruyama(system_type="pendulum", n_traj=5, seq_l
                         sigma = [0.0, noise_lvl, 0.0, noise_lvl]
                     else:
                         sigma = noise_lvl # Assumes noise_lvl is already a 4-element list
-
+        
+        elif system_type == "hvac_on_off_system" :
+                    T_1_start = 25 + 273.15
+                    T_1_range = 1.0
+                    T_2_start = 22 + 273.15
+                    T_2_range = 0.5
+                    T_wall_start = 20 + 273.15
+                    T_wall_range = 0.5
+                    T_outer_start = 22 + 273.15
+                    T_outer_range = 0.5
+                    # Initialize all 4 states
+                    init = [
+                        T_1_start + np.random.uniform(-T_1_range, T_1_range), # x1
+                        T_2_start + np.random.uniform(-T_2_range, T_2_range), # x1_dot
+                        T_wall_start + np.random.uniform(-T_wall_range, T_wall_range), # x2
+                        T_outer_start + np.random.uniform(-T_outer_range, T_outer_range),  # x2_dot
+   
+                    ]
+                    
+                    func = hvac_on_off_system
+                    u_dim = 1 # Usually 2 for coupled systems, one per mass
+                    u_scale = 1.0
+                    
+                    # Parameters for the 4-state system
+                    # Mapping: (m1, m2, d1, d2, k_lin, k_cub)
+                    params = (0.1, 0.9, 5.0) 
+                    process_noise = [0.0, 0.0, 0.0, 0.0]
+                    # Process noise applied to the velocity derivatives (indices 1 and 3)
+                    if isinstance(noise_lvl, float):
+                        sigma = [0.0, 0.0, 0.0, 0.0]
+                    else:
+                        sigma = noise_lvl 
+        elif system_type == "nonlinear_hvac_system" :
+                    T_1_start = 25 + 273.15
+                    T_1_range = 1.0 
+                    T_2_start = 22 + 273.15
+                    T_2_range = 0.5 
+                    T_wall_start = 20 + 273.15
+                    T_wall_range = 0.5
+                    T_outer_start = 22 + 273.15
+                    T_outer_range = 0.5
+                    # Initialize all 4 states
+                    init = [
+                        T_1_start + np.random.uniform(-T_1_range, T_1_range), # x1
+                        T_2_start + np.random.uniform(-T_2_range, T_2_range), # x1_dot
+                        T_wall_start + np.random.uniform(-T_wall_range, T_wall_range), # x2
+                        T_outer_start + np.random.uniform(-T_outer_range, T_outer_range)  # x2_dot
+                    ]
+                    
+                    func = nonlinear_hvac_system
+                    u_dim = 1 # Usually 2 for coupled systems, one per mass
+                    u_scale = 1.0
+                    
+                    # Parameters for the 4-state system
+                    # Mapping: (m1, m2, d1, d2, k_lin, k_cub)
+                    params = (0.05, 0.8, 5.67e-8, 500.0)
+                    process_noise = [0.0, 0.0, 0.0, 0.0]
+                    # Process noise applied to the velocity derivatives (indices 1 and 3)
+                    if isinstance(noise_lvl, float):
+                        sigma = [noise_lvl, noise_lvl, noise_lvl, noise_lvl]
+                    else:
+                        sigma = noise_lvl 
 
         if control:
             u_seq = np.zeros((seq_len, u_dim))
@@ -185,7 +290,11 @@ def generate_trajectories_euler_maruyama(system_type="pendulum", n_traj=5, seq_l
                     pulse_len = np.random.randint(5, 15) 
                     
                     u_val = np.random.uniform(-u_scale, u_scale)
-                    
+                    if system_type == "nonlinear_hvac_system" or system_type == "hvac_on_off_system":
+                         if u_val < 0.5:
+                              u_val = 0
+                         else:
+                              u_val = 1.0
                     end_idx = min(current_idx + pulse_len, seq_len)
                     u_seq[current_idx:end_idx, d] = u_val
                     
@@ -204,7 +313,7 @@ def generate_trajectories_euler_maruyama(system_type="pendulum", n_traj=5, seq_l
                 for _ in range(sub_steps):
                     # 1. Deterministic Physics (Drift)
                     derivs = func(curr_state, 0, u_curr, *params, 
-                                  process_noise=[0.0, 0.0], control_noise=0.0)
+                                  process_noise=process_noise, control_noise=0.0)
                     
                     # 2. Stochastic Physics (Diffusion)
                     # np.random.normal(0, sigma) works per-element if sigma is a list
@@ -218,3 +327,4 @@ def generate_trajectories_euler_maruyama(system_type="pendulum", n_traj=5, seq_l
         # all_u.append(u_seq.reshape(-1, 1))
 
     return np.array(all_x), np.array(all_u), t
+ """

@@ -8,12 +8,12 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 import joblib
 
-# Assuming these are in your local project files
-
 from models.models import ResidualMLP, LinearMatrix, TTKoopman, KoopmanEncoder, LinearKoopmanEncoder
-from systems.controlled_simulators import generate_trajectories_euler_maruyama
+from systems.simulators import generate_trajectories_euler_maruyama
 from trainers.Controlled_Multi_KVAE_trainer import ControlledKoopmanVAETrainer
 from logger.logger import InfoVectorLogger
+from systems.registry import SYSTEM_REGISTRY
+
 
 # -------------------------------------------------------
 # Utilities
@@ -70,120 +70,7 @@ def split_into_subsequences_controlled(x_seqs, u_seqs, subseq_len, stride=1):
             u_sub.append(u_traj[start:start + subseq_len])
     return x_sub, u_sub
 
-class ControlledSequenceDataset(Dataset):
-    def __init__(self, x_sequences, u_sequences):
-        self.x = [torch.tensor(s, dtype=torch.float32) for s in x_sequences]
-        self.u = [torch.tensor(s, dtype=torch.float32) for s in u_sequences]
-
-    def __len__(self):
-        return len(self.x)
-
-    def __getitem__(self, idx):
-        return self.x[idx], self.u[idx]
-
-# -------------------------------------------------------
-# Main
-# -------------------------------------------------------
-
-def main():
-    device = "cuda" if torch.cuda.is_available() else "cpu"
-
-    plot_training_trajs = True
-    
-    normalize_scale = False
-    concat_true = True
-    encode_control = False
-    remove_theta_acc = False
-
-    # --- Configuration ---
-    DATASET = "complex_nonlinear_system"  # "cartpole" or "inverted_pendulum"
-    log_name = "Test_underactuated_nonlinear_encoder"
-    num_epochs = 5000
-    save_every = 500
-
-    n_traj = 100
-    seq_len = 50
-    subseq_len = 20
-    stride = 5
-    dt = 0.1
-    sub_steps = 10
-    batch_size = 64*4
-    latent_dim = 32
-    hidden_dim = 128
-    horizon = 15
-    
-    
-    log_name = (
-        f"{log_name}_normalized_"
-        f"{normalize_scale}_state_concat_{concat_true}_"
-        f"control_enc_{encode_control}_spec_free_latent_dim_{latent_dim}"
-    )
-
-    # New Noise Configuration
-    # For cartpole: [x_noise, theta_noise]
-    # For pendulum: just a float (applied to omega)
-    noise_lvl = [0.0, 0.00] if DATASET == "cartpole" else 0.00
-
-    # --- System Specific Meta-Setup ---
-    if DATASET == "cartpole":
-        state_dim = 5
-        control_dim = 1
-       # labels = [r"$x$", r"$\dot{x}$", r"$\theta$", r"$\dot{\theta}$"]
-        labels = [r"$x$", r"$\dot{x}$", r"$\sin(\theta)$", r"$\cos(\theta)$", r"$\dot{\theta}$"]
-
-    elif DATASET == "pendulum":
-        state_dim = 2
-        control_dim = 1
-        labels = [r"$\theta$", r"$\omega$"]
-
-    elif DATASET == "cartpole_linear":
-        state_dim = 4
-        control_dim = 1
-        labels = [r"$x$", r"$\dot{x}$", r"$\theta$", r"$\dot{\theta}$"]
-
-    elif DATASET == "simple_independent_linear":
-        state_dim = 4
-        control_dim = 2
-        labels = [r"$x$", r"$\dot{x}$", r"$z$", r"$\dot{z}$"]
-
-    elif DATASET == "simple_nonlinear_spring":
-        state_dim = 2
-        control_dim = 1
-        # Only two labels needed: position and velocity
-        labels = [r"$x$", r"$\dot{x}$"]
-
-    elif DATASET == "complex_nonlinear_system":
-        # System has two masses, each with position and velocity
-        state_dim = 4
-        control_dim = 1 # Force can be applied to mass 1 and mass 2
-        
-        # Labels for mass 1 and mass 2
-        labels = [
-            r"$x_1$",      # Position Mass 1
-            r"$\dot{x}_1$", # Velocity Mass 1
-            r"$x_2$",      # Position Mass 2
-            r"$\dot{x}_2$"  # Velocity Mass 2
-        ]
-
-
-
-
-    # --- 1. Generate Data using Euler-Maruyama ---
-    print(f"Generating {n_traj} trajectories for {DATASET} via Euler-Maruyama...")
-    
-    # We use your imported EM function which handles the internal loop and sub-stepping
-    X_raw, U_raw, t_axis = generate_trajectories_euler_maruyama(
-        system_type=DATASET,
-        n_traj=n_traj,
-        seq_len=seq_len,
-        dt=dt,
-        noise_lvl=noise_lvl,
-        sub_steps=sub_steps,
-        control=True
-    )
-
-    #  Trigonometric Embedding for Cartpole ---
-    def apply_trigonometric_embedding(X, is_batch=True):
+def apply_trigonometric_embedding(X, is_batch=True):
         """
         Transforms state from [x, x_dot, theta, theta_dot] 
         to [x, x_dot, sin(theta), cos(theta), theta_dot].
@@ -210,14 +97,81 @@ def main():
             # X shape: (4,)
             x, x_dot, theta, theta_dot = X
             return np.array([x, x_dot, np.sin(theta), np.cos(theta), theta_dot])
+        
+class ControlledSequenceDataset(Dataset):
+    def __init__(self, x_sequences, u_sequences):
+        self.x = [torch.tensor(s, dtype=torch.float32) for s in x_sequences]
+        self.u = [torch.tensor(s, dtype=torch.float32) for s in u_sequences]
 
-    # --- Usage in your main script ---
-  
-    if DATASET == "cartpole":
-        X_raw = apply_trigonometric_embedding(X_raw, is_batch=True)
-        state_dim = 5
-        labels = [r"$x$", r"$\dot{x}$", r"$\sin(\theta)$", r"$\cos(\theta)$", r"$\dot{\theta}$"]
+    def __len__(self):
+        return len(self.x)
 
+    def __getitem__(self, idx):
+        return self.x[idx], self.u[idx]
+
+# -------------------------------------------------------
+# Main
+# -------------------------------------------------------
+
+def main():
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+
+    # --- Configuration ---
+    plot_training_trajs = True
+    normalize_scale = False
+    concat_true = True
+    encode_control = False
+    remove_theta_acc = False
+
+    
+    DATASET = "hvac_nonlinear"
+    log_name = "TestEMA_onoff_nonlinear_encoder"
+    num_epochs = 20000
+    save_every = 500
+
+    n_traj = 10
+    seq_len = 50
+    subseq_len = 20
+    stride = 1
+    dt = 1
+    substeps = 10
+    batch_size = 64*4
+    latent_dim = 128
+    hidden_dim = 128*2
+    horizon = 15
+    
+    log_name = (
+        f"{log_name}_normalized_"
+        f"{normalize_scale}_state_concat_{concat_true}_"
+        f"control_enc_{encode_control}_spec_free_latent_dim_{latent_dim}"
+    )
+
+
+    # --- 1. Generate Data by Simulating the System with EM ---
+    print(f"Generating {n_traj} trajectories for {DATASET} via Euler-Maruyama...")
+    
+    system = SYSTEM_REGISTRY[DATASET]
+    state_dim = system.state_dim
+    control_dim = system.control_dim
+    labels = system.labels
+
+    process_noise = [0.0, 0.00] if DATASET == "cartpole" else 0.00
+    control_noise = 0.0
+
+    X_raw, U_raw = generate_trajectories_euler_maruyama(
+        system,
+        n_traj=n_traj,
+        seq_len=seq_len,
+        dt=dt,
+        process_noise=process_noise,
+        control_noise=control_noise,
+        substeps=substeps,
+        control=True
+    )
+    remove_states = True
+    if remove_states:
+       X_raw = X_raw[:, :, 0:3]
+       state_dim = X_raw.shape[2]
 
     if plot_training_trajs:
         save_training_trajectories(
@@ -229,11 +183,7 @@ def main():
             num_figs=5
         )
 
-    if remove_theta_acc:
-        state_dim = state_dim -1
-        X_raw = X_raw[:, :, :-1]
-
-    # --- 2. Prepare Training Data  ---
+    # -------Prepare and Normalize (Optional) Training Data  ---
     if normalize_scale:
         X_flat = X_raw.reshape(-1, state_dim)
         U_flat = U_raw.reshape(-1, control_dim)
@@ -259,22 +209,18 @@ def main():
     else:
         X_train, U_train =X_raw, U_raw
 
-
-
-    # --- 3. Dataset Preparation ---
     x_sequences = [X_train[i] for i in range(n_traj)]
     u_sequences = [U_train[i] for i in range(n_traj)]
 
     x_sub, u_sub = split_into_subsequences_controlled(x_sequences, u_sequences, subseq_len, stride)
     loader = DataLoader(ControlledSequenceDataset(x_sub, u_sub), batch_size=batch_size, shuffle=True)
 
+    #----------Modules
     #encoder = LinearKoopmanEncoder(state_dim, latent_dim).to(device)  
     encoder = KoopmanEncoder(state_dim, latent_dim, hidden_dim, hidden_depth=5).to(device)  
    
-
     if concat_true:
         latent_dim = latent_dim + state_dim 
-
     #decoder = ResidualMLP(latent_dim, state_dim, [hidden_dim]*3).to(device)
     decoder = LinearMatrix(latent_dim , state_dim).to(device)
 
@@ -291,7 +237,6 @@ def main():
         control_decoder = None
         control_matrix = LinearMatrix(control_dim, latent_dim).to(device)
 
-    # --- STABILITY INITIALIZATION ---
     with torch.no_grad():
         for param in control_matrix.parameters():
             param.data.mul_(0.1)
@@ -303,7 +248,7 @@ def main():
         list(decoder.parameters()) + 
         list(system_matrix.parameters()) + 
         list(control_matrix.parameters()),
-        lr=1e-3
+        lr=5e-4
     )
 
     logger = InfoVectorLogger(log_dir=f"logs/{log_name}_{DATASET}")
@@ -326,7 +271,7 @@ def main():
         delta=1.e-10,         # Spectral loss weight
         alpha=0.0,        # Entropy loss weight
         epsilon_1 = 10.00,  #Initial reconstruction loss weight
-        epsilon_2 = 0.00,   # All-time reconstruction loss weight
+        epsilon_2 = 10.00,   # All-time reconstruction loss weight
         zero_structure_gain = 0.0, # Zero-structure loss weight
         device=device,
         logger=logger,

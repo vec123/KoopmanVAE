@@ -14,13 +14,12 @@ def inverted_pendulum_controlled(state, t, u, m=1.0, l=1.0, g=9.81, b=0.1,
     dtheta = omega
     
     # 2. Physics calculation
-    domega = (u_noisy - b * omega - m * g * l * np.sin(theta)) / (m * l**2)
-    
+    omega = (u_noisy - b * omega - m * g * l * np.sin(theta)) / (m * l**2)
+     
     # 3. Apply Process Noise (Environmental disturbances to acceleration)
     domega += np.random.normal(0, process_noise[0])
     
     return [dtheta, domega]
-
 
 def cartpole_controlled(state, t, u, mc=1.0, mp=0.1, l=0.5, g=9.81, b=0.1, 
                         process_noise=[0.0, 0.0], control_noise=0.0):
@@ -48,66 +47,6 @@ def cartpole_controlled(state, t, u, mc=1.0, mp=0.1, l=0.5, g=9.81, b=0.1,
     
     x =  [x_dot, x_acc, theta_dot, theta_acc]
     return x 
-
-""" 
-def cartpole_controlled_old(state, t, u, mc=1.0, mp=0.1, l=0.5, g=9.81, b=0.1, 
-                        process_noise=[0.0, 0.0], control_noise=0.0):
-    x, x_dot, theta, theta_dot = state
-    
-    # Apply Control Noise and Friction
-    u_val = u[0] if hasattr(u, "__len__") else u
-    # Friction opposes the direction of x_dot
-    u_noisy = u_val + np.random.normal(0, control_noise) - b * x_dot
-    
-    sin_t = np.sin(theta)
-    cos_t = np.cos(theta)
-
-    # Common denominator term
-    total_m = mc + mp
-    
-    # Corrected Physics for theta=0 being UPRIGHT
-    # Note: If theta=0 is down, your original g*sin_t was actually okay.
-    temp = (u_noisy + mp * l * theta_dot**2 * sin_t) / total_m
-    denom = l * (4.0/3.0 - (mp * cos_t**2) / total_m)
-    
-    theta_acc = (g * sin_t - cos_t * temp) / denom
-    x_acc = temp - (mp * l * theta_acc * cos_t) / total_m
-
-    # Apply Process Noise
-    x_acc += np.random.normal(0, process_noise[0])
-    theta_acc += np.random.normal(0, process_noise[1])
-
-    x =  [x_dot, x_acc, theta_dot, theta_acc]
-    x = apply_trigonometric_embedding(x, is_batch=False)
-    print("x.shape: ", x.shape)
-    return  x
-"""
-def cartpole_controlled_(state, t, u, mc=1.0, mp=0.1, l=0.5, g=9.81, b=0.1, 
-                        process_noise = [ 0.0,0.0 ], control_noise=0.0):
-    """
-    State: [x, x_dot, theta, theta_dot]
-    u: Force applied to the cart
-    """
-    x, x_dot, theta, theta_dot = state
-    
-    # 1. Apply Control Noise
-    u_val = u[0] if hasattr(u, "__len__") else u
-    u_noisy = u_val + np.random.normal(0, control_noise)
-    
-    sin_t = np.sin(theta)
-    cos_t = np.cos(theta)
-
-    # Denominator for acceleration calculations
-    temp = (u_noisy + mp * l * theta_dot**2 * sin_t) / (mc + mp)
-    theta_acc = (g * sin_t - cos_t * temp) / (l * (4.0/3.0 - mp * cos_t**2 / (mc + mp)))
-    x_acc = temp - mp * l * theta_acc * cos_t / (mc + mp)
-
-    # 2. Apply Process Noise to both accelerations
-    # x_acc and theta_acc get random hits from the environment
-    x_acc += np.random.normal(0, process_noise[0])
-    theta_acc += np.random.normal(0,  process_noise[1])
-
-    return [x_dot, x_acc, theta_dot, theta_acc]
 
 def cartpole_linear(state, t, u, mc=1.0, mp=0.1, l=0.5, g=9.81, process_noise=[0.0, 0.0], control_noise=0.0):
     """
@@ -172,46 +111,6 @@ def simple_nonlinear_spring(state, t, u, delta=0.1, alpha=1.0, beta=5.0,
     
     return [x_dot, x_acc]
 
-
-def complex_nonlinear_system_(state, t, u, m1=1.0, m2=1.0, d1=0.1, d2=0.1, 
-                             k_lin=1.0, k_cub=5.0, 
-                             process_noise=[0.0, 0.0, 0.0, 0.0], 
-                             control_noise=0.0):
-    """
-    4-State Nonlinear Coupled Oscillator.
-    State: [x1, v1, x2, v2]
-    u: [force_on_m1, force_on_m2]
-    """
-    x1, v1, x2, v2 = state
-    
-    # Apply control noise to the input forces
-    if hasattr(u, "__len__"):
-        u1_noisy = u[0] + np.random.normal(0, control_noise)
-        u2_noisy = u[1] + np.random.normal(0, control_noise)
-    else:
-        u1_noisy = u + np.random.normal(0, control_noise)
-        u2_noisy = 0.0
-    
-    # 1. Coupling Force between masses
-    rel_dist = x2 - x1
-    f_coupling = k_lin * rel_dist + k_cub * (rel_dist**3)
-    
-    # 2. Physics Equations (Accelerations)
-    # Mass 1: Control + Coupling - Damping - Linear Wall Spring
-    a1 = (u1_noisy + f_coupling - d1 * v1 - k_lin * x1) / m1
-    
-    # Mass 2: Control - Coupling - Damping - Linear Wall Spring
-    a2 = (u2_noisy - f_coupling - d2 * v2 - k_lin * x2) / m2
-    
-    # 3. Apply Process Noise to accelerations (indices 1 and 3 in the state)
-    # If process_noise is length 2, we map them to a1 and a2. 
-    # If length 4, we use indices 1 and 3.
-    p_noise = process_noise
-    a1 += np.random.normal(0, p_noise[1] if len(p_noise) == 4 else p_noise[0])
-    a2 += np.random.normal(0, p_noise[3] if len(p_noise) == 4 else p_noise[1])
-    
-    return [v1, a1, v2, a2]
-
 def complex_nonlinear_system(state, t, u, m1=1.0, m2=1.0, d1=0.1, d2=0.1, 
                                  k_lin=1.0, k_cub=5.0, 
                                  process_noise=[0.0, 0.0, 0.0, 0.0], 
@@ -242,7 +141,6 @@ def complex_nonlinear_system(state, t, u, m1=1.0, m2=1.0, d1=0.1, d2=0.1,
     a2 += np.random.normal(0, p_noise[3] if len(p_noise) == 4 else p_noise[1])
     
     return [v1, a1, v2, a2]
-
 
 def hvac_on_off_system(state, t, u, 
                        insulation=0.05, coupling=0.02, heater_power=5.0,
@@ -281,12 +179,55 @@ def hvac_on_off_system(state, t, u,
         
     return derivs
 
+def hvac_on_off_system_(state, t, u, 
+                           insulation=0.05, heater_power=5.0, damping=0.1,
+                           process_noise=[0.01, 0.01, 0.01, 0.01], control_noise=0.0):
+    """
+    State vector x: [T1, T2, Tw, Tout, V1, V2, Vw, Vout]
+    - T: Temperatures (Positions)
+    - V: Rate of change (Velocities)
+    """
+    T1, T2, Tw, Tout, V1, V2, Vw, Vout = state
+    
+    # Binary control logic
+    heater_on = 1.0 if u > 0.5 else 0.0
+    
+    # 1. Kinematics: The change in temperature is the current velocity
+    dT1 = V1
+    dT2 = V2
+    dTw = Vw
+    dTout = Vout
+    
+    # 2. Dynamics: The change in velocity (Acceleration)
+    # Each equation follows: Thermal_Force - Damping + Random_Noise
+    
+    # Room 1 acceleration
+    dV1 = (heater_on * heater_power - insulation * (T1 - Tw)) - (damping * V1)
+    
+    # Room 2 acceleration
+    dV2 = (insulation * (T1 - T2) - insulation * (T2 - Tw)) - (damping * V2)
+    
+    # Wall mass acceleration
+    dVw = (insulation * (T1 - Tw) + insulation * (T2 - Tw) - insulation * (Tw - Tout)) - (damping * Vw)
+    
+    # Outside drift: Modeling it as a random walk or a state-driven drift
+    # Removing np.sin(t) makes it mathematically autonomous if 'u' is internalized.
+    dVout = -0.001 * (Tout - 15.0) # Restoring force toward 15 degrees
+    
+    # Apply Process Noise to the VELOCITY states (Random Forces)
+    accelerations = [dV1, dV2, dVw, dVout]
+    for i in range(len(accelerations)):
+        accelerations[i] += np.random.normal(0, process_noise[i])
+        
+    return [dT1, dT2, dTw, dTout] + accelerations
+
 def nonlinear_hvac_system(state, t, u, 
                           k_conv=0.05,  # Convective coefficient
                           epsilon=0.9,  # Emissivity (0 to 1)
                           sigma_sb=5.67e-8, # Stefan-Boltzmann constant
                           heater_power=5000.0,
-                          process_noise=[0.1, 0.1, 0.1, 0.1]):
+                          process_noise=[0.1, 0.1, 0.1, 0.1],
+                           control_noise=0.0):
     """
     Nonlinear Thermal System with T^4 Radiation and On/Off Control.
     State: [T1, T2, Twall, Tout] in Kelvin
@@ -318,7 +259,7 @@ def nonlinear_hvac_system(state, t, u,
     dTwall = radiation(T1, Twall) + radiation(T2, Twall) - convection(Twall, Tout)
     
     # Outside: Slow oscillation (diurnal cycle)
-    dTout = 0.05 * np.cos(t / 24)
+    dTout =0 # 0.05 * np.cos(t / 24)
 
     derivs = [dT1, dT2, dTwall, dTout]
     

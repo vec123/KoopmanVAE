@@ -10,6 +10,9 @@ import torch.nn.functional as F
 import numpy as np
 from torch.utils.data import DataLoader, Subset
 
+from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
+
+
 class ControlledKoopmanVAETrainer:
     def __init__(
         self,
@@ -17,17 +20,17 @@ class ControlledKoopmanVAETrainer:
         decoder,
         system_matrix,
         control_matrix,
-        dataloader, # Primary dataloader
+        dataloader,
         optimizer,
         latent_dim,
         control_encoder = None,
         control_decoder = None,
-        val_dataloader=None,  # Optional: pass a pre-split val set
-        val_split=0.1,        # If val_dataloader is None, split this % from train
+        val_dataloader=None,  
+        val_split=0.1,        
         device=None,
         logger=None,
         save_epoch=50,
-        val_epochs=10,        # Frequency of validation
+        val_epochs=10,        
         horizon=20,
         beta=1e-3,
         gamma_1=1.0,
@@ -41,6 +44,7 @@ class ControlledKoopmanVAETrainer:
         stochastic = False,
         concat_true = False,
         horizon_decay = 1.0,
+        use_ema = True
     ):
         self.device = device or ("cuda" if torch.cuda.is_available() else "cpu")
         self.stochastic = stochastic
@@ -54,7 +58,6 @@ class ControlledKoopmanVAETrainer:
         self.control_encoder = control_encoder.to(self.device) if control_encoder else None
         self.control_decoder = control_decoder.to(self.device) if control_encoder else None
 
-        # Handle Data Splitting
         if val_dataloader is not None:
             self.train_loader = dataloader
             self.val_loader = val_dataloader
@@ -81,6 +84,14 @@ class ControlledKoopmanVAETrainer:
         self.global_epoch = 0
         self.best_val_loss = float('inf')
 
+        self.use_ema = use_ema  
+        self.ema_decay = 0.999
+        if self.use_ema:
+            self.ema_encoder = AveragedModel(self.encoder, multi_avg_fn=get_ema_multi_avg_fn(self.ema_decay))
+            self.ema_decoder = AveragedModel(self.decoder, multi_avg_fn=get_ema_multi_avg_fn(self.ema_decay))
+            self.ema_A = AveragedModel(self.A, multi_avg_fn=get_ema_multi_avg_fn(self.ema_decay))
+            self.ema_B = AveragedModel(self.B, multi_avg_fn=get_ema_multi_avg_fn(self.ema_decay))
+    
     def _split_dataloader(self, dataloader, split_frac):
         dataset = dataloader.dataset
         n_val = int(len(dataset) * split_frac)
@@ -135,7 +146,6 @@ class ControlledKoopmanVAETrainer:
             U_rec_flat = self.control_decoder(u_enc_flat)
             loss_rec_control = F.mse_loss(U_rec_flat, U_true.reshape(-1, Du))
             
-  
 
         #Compute Encoding Losses
         entropy_loss = self.entropy_loss(logstd_all[:, 0], min_entropy_threshold=1.0)
@@ -204,6 +214,11 @@ class ControlledKoopmanVAETrainer:
             total_loss.backward()
             # torch.nn.utils.clip_grad_norm_(self.optimizer.param_groups[0]['params'], 1.0)
             self.optimizer.step()
+            if self.use_ema:
+                self.ema_encoder.update_parameters(self.encoder)
+                self.ema_decoder.update_parameters(self.decoder)
+                self.ema_A.update_parameters(self.A)
+                self.ema_B.update_parameters(self.B)
 
         return {
             "loss": total_loss.item(),
@@ -218,9 +233,13 @@ class ControlledKoopmanVAETrainer:
             "control_rec": loss_rec_control.item()
         }
     
-    def validate(self, train_batch=None):
+    def validate_old(self, train_batch=None):
             """Runs validation and triggers trajectory visualization for BOTH sets."""
-            
+            encoder = self.ema_encoder if self.use_ema else self.encoder
+            decoder = self.ema_decoder if self.use_ema else self.decoder
+            A_model = self.ema_A if self.use_ema else self.A
+            B_model = self.ema_B if self.use_ema else self.B
+
             self.encoder.eval()
             self.decoder.eval()
             self.A.eval()
@@ -251,6 +270,33 @@ class ControlledKoopmanVAETrainer:
 
             return avg_val_logs
     
+    def validate(self, train_batch=None):
+        self.encoder.eval(); self.decoder.eval(); self.A.eval(); self.B.eval()
+        
+        val_logs = {}
+        last_val_batch = None
+
+        # Use the context manager to swap weights
+        with self.ema_scope():
+            with torch.no_grad():
+                for X, U in self.val_loader:
+                    # This now uses EMA weights automatically!
+                    step_out = self.train_step(X, U, optimize=False)
+                    for k, v in step_out.items():
+                        val_logs[k] = val_logs.get(k, 0.0) + v
+                    last_val_batch = (X, U)
+
+                # Average validation logs
+                avg_val_logs = {f"val_{k}": v / len(self.val_loader) for k, v in val_logs.items()}
+                
+                # Visualization will also use EMA weights
+                if last_val_batch:
+                    self.visualize_and_save(last_val_batch[0], last_val_batch[1], prefix="val_ema")
+                if train_batch:
+                    self.visualize_and_save(train_batch[0], train_batch[1], prefix="train_ema")
+
+        return avg_val_logs
+
     def train(self, epochs):
             for epoch in range(epochs):
                 self.global_epoch += 1
@@ -455,4 +501,33 @@ class ControlledKoopmanVAETrainer:
                 return val.weight if isinstance(val, nn.Linear) else val
         return list(self.A.parameters())[0]
 
+    from contextlib import contextmanager
+
+    @contextmanager
+    def ema_scope(self):
+        if not self.use_ema:
+            yield
+            return
+
+        # 1. Store original parameters
+        orig_params = {
+            "enc": self.encoder.state_dict(),
+            "dec": self.decoder.state_dict(),
+            "A": self.A.state_dict(),
+            "B": self.B.state_dict()
+        }
+
+        try:
+            # 2. Load EMA parameters into the "live" models
+            self.encoder.load_state_dict(self.ema_encoder.module.state_dict())
+            self.decoder.load_state_dict(self.ema_decoder.module.state_dict())
+            self.A.load_state_dict(self.ema_A.module.state_dict())
+            self.B.load_state_dict(self.ema_B.module.state_dict())
+            yield
+        finally:
+            # 3. Restore original parameters for training
+            self.encoder.load_state_dict(orig_params["enc"])
+            self.decoder.load_state_dict(orig_params["dec"])
+            self.A.load_state_dict(orig_params["A"])
+            self.B.load_state_dict(orig_params["B"])
 
