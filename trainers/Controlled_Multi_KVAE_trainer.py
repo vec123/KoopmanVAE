@@ -23,6 +23,8 @@ class ControlledKoopmanVAETrainer:
         dataloader,
         optimizer,
         latent_dim,
+        external_forcing_matrix = None,
+        learned_external_forcing = False,
         control_encoder = None,
         control_decoder = None,
         val_dataloader=None,  

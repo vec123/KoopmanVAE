@@ -6,11 +6,11 @@ from models.models import LinearMatrix
 
 def main():
     # 1. Configuration
-    sensor_name ="ES0031405047432001AZ0F"
-    LOG_NAME = f"{sensor_name}_Multi_KVAE_energy"
+    SENSOR_NAME ="ES0031405047432001AZ0F"
+    LOG_NAME = f"Multi_KVAE_energy_{SENSOR_NAME}"
     LOG_DIR = f"logs/{LOG_NAME}"
-    epoch = 6500
-    KOOPMAN_PATH = os.path.join(LOG_DIR, f"koopman_matrix_{epoch}.pt")
+    epoch = 5000
+    KOOPMAN_PATH = os.path.join(LOG_DIR, f"system_matrix_{epoch}.pt")
     SAVE_PATH = os.path.join(LOG_DIR, f"koopman_eigendecomp_{epoch}.pkl")
     device = "cpu" # Eigendecomposition is usually faster on CPU for this size
 
