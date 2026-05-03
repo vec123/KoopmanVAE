@@ -262,6 +262,56 @@ class ResidualMLP(nn.Module):
         out = self.final(h)
         return out
     
+class BottleneckedResidualMLP(nn.Module):
+    """
+    MLP with residual blocks and a centralized bottleneck.
+    """
+    def __init__(self, in_dim, out_dim, hidden_channels=None, bottleneck_dim=None):
+        super().__init__()
+        if hidden_channels is None:
+            hidden_channels = [128, 128]
+        
+        # 1. Encoder/Compression path
+        enc_layers = []
+        curr_dim = in_dim
+        for h in hidden_channels:
+            enc_layers.append(MLPResidualBlock(curr_dim, h))
+            curr_dim = h
+        self.encoder = nn.Sequential(*enc_layers)
+
+        # 2. The Bottleneck
+        # If no bottleneck_dim is provided, we default to a small value (e.g., 2 or 4)
+        self.bottleneck_dim = bottleneck_dim if bottleneck_dim else max(1, out_dim // 8)
+        self.to_bottleneck = nn.Linear(hidden_channels[-1], self.bottleneck_dim)
+        
+        # 3. Decoder/Expansion path
+        self.from_bottleneck = nn.Linear(self.bottleneck_dim, hidden_channels[-1])
+        
+        dec_layers = []
+        curr_dim = hidden_channels[-1]
+        for h in reversed(hidden_channels):
+            dec_layers.append(MLPResidualBlock(curr_dim, h))
+            curr_dim = h
+        self.decoder = nn.Sequential(*dec_layers)
+
+        # 4. Final Projection
+        self.final = nn.Linear(hidden_channels[-1], out_dim)
+
+    def forward(self, x):
+        # Compress
+        h = self.encoder(x)
+        
+        # Pass through bottleneck (the "sparse" signal)
+        b = torch.tanh(self.to_bottleneck(h)) 
+        
+        # Expand
+        h = self.from_bottleneck(b)
+        h = self.decoder(h)
+        
+        # Final adjustment
+        out = self.final(h)
+        return out
+    
 class KoopmanEncoder(torch.nn.Module):
         def __init__(self, state_dim, latent_dim, hidden_dim_int, hidden_depth=5):
             super().__init__()
@@ -294,7 +344,7 @@ class LinearKoopmanEncoder(torch.nn.Module):
             
             # We ensure the second argument (out_dim) is an INTEGER.
             # We pass the list of hidden layers to the third argument.
-    
+
             self.fc_mu = LinearMatrix(state_dim, latent_dim)
             self.fc_logstd =LinearMatrix(state_dim, latent_dim)
 
@@ -317,8 +367,12 @@ class LinearMatrix(nn.Module):
     def __init__(self, in_dim, out_dim, bias=False):
         super().__init__()
         self.is_mlp = False
-        self.linear = nn.Linear(in_dim, out_dim, bias=bias)
+                
+        self.input_dim = in_dim
+        self.output_dim = out_dim
 
+        self.linear = nn.Linear(in_dim, out_dim, bias=bias)
+        
     def forward(self, x):
         """
         x: [B, T, in_dim] or [B, in_dim]

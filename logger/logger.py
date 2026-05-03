@@ -245,7 +245,7 @@ class InfoVectorLogger:
         plt.savefig(save_path)
         plt.close()
 
-    def save_trajectories_w_control_(self, z_traj, x_rec, x_true=None, u_true=None, step=None,  prefix=""):
+    def save_trajectories_w_control_and_forcing(self, z_traj, x_rec, x_true=None, u_true=None, u_rec=None, f_true=None, step=None, prefix=""):
         def ensure_numpy(t):
             if isinstance(t, torch.Tensor):
                 t = t.detach().cpu().numpy()
@@ -255,45 +255,68 @@ class InfoVectorLogger:
         x_rec = ensure_numpy(x_rec)
         x_true = ensure_numpy(x_true)
         u_true = ensure_numpy(u_true)
+        u_rec = ensure_numpy(u_rec)
+        f_true = ensure_numpy(f_true) # New forcing array
 
         # Remove batch dimension: [1, T, D] -> [T, D]
         if z_traj.ndim == 3: z_traj = z_traj[0]
         if x_rec.ndim == 3: x_rec = x_rec[0]
         if x_true is not None and x_true.ndim == 3: x_true = x_true[0]
         if u_true is not None and u_true.ndim == 3: u_true = u_true[0]
+        if u_rec is not None and u_rec.ndim == 3: u_rec = u_rec[0]
+        if f_true is not None and f_true.ndim == 3: f_true = f_true[0]
 
         Dx = x_rec.shape[1]
         Du = u_true.shape[1] if u_true is not None else 0
-        total_rows = Dx + Du
+        Df = f_true.shape[1] if f_true is not None else 0
+        
+        # New total rows include States + Controls + Forcing
+        total_rows = Dx + Du + Df
 
-        # Create one large figure for both states and control
-        fig, axes = plt.subplots(total_rows, 1, figsize=(10, 2 * total_rows), sharex=True, squeeze=False)
+        fig, axes = plt.subplots(total_rows, 1, figsize=(10, 2.5 * total_rows), sharex=True, squeeze=False)
 
-        # 1. Plot States (Reconstructed vs True)
+        # 1. Plot States
         for i in range(Dx):
-            axes[i, 0].plot(x_rec[:, i], label="Rec", color='tab:red', linewidth=1.5)
             if x_true is not None:
-                axes[i, 0].plot(x_true[:, i], 'k--', label="True", alpha=0.6)
+                axes[i, 0].plot(x_true[:, i], 'k--', label="True State", alpha=0.6)
+            axes[i, 0].plot(x_rec[:, i], label="Rec State", color='tab:red', linewidth=1.5)
             
-            ylabel = self.labels[i] if (self.labels and i < len(self.labels)) else f"State {i}"
+            ylabel = self.labels[i] if (hasattr(self, 'labels') and self.labels and i < len(self.labels)) else f"State {i}"
             axes[i, 0].set_ylabel(ylabel)
             axes[i, 0].grid(True, alpha=0.3)
             if i == 0: axes[i, 0].legend(loc='upper right')
 
-        # 2. Plot Controls at the bottom
+        # 2. Plot Controls (True vs Reconstructed)
         if u_true is not None:
             for j in range(Du):
                 ax_idx = Dx + j
-                # Using .step with 'post' for zero-order hold control signals
-                axes[ax_idx, 0].step(range(len(u_true)), u_true[:, j], color='tab:green', where='post', label="Control")
+                axes[ax_idx, 0].step(range(len(u_true)), u_true[:, j], 'k--', where='post', label="U True", alpha=0.5)
+                
+                if u_rec is not None:
+                    axes[ax_idx, 0].step(range(len(u_rec)), u_rec[:, j], color='tab:green', where='post', label="U Rec")
+                
                 axes[ax_idx, 0].set_ylabel(f"Control $u_{{{j}}}$")
                 axes[ax_idx, 0].grid(True, alpha=0.3)
                 if j == 0: axes[ax_idx, 0].legend(loc='upper right')
 
+        # 3. Plot External Forcing
+        if f_true is not None:
+            for k in range(Df):
+                ax_idx = Dx + Du + k
+                # Forcing is usually continuous (like temp), so we use plot instead of step
+                axes[ax_idx, 0].plot(f_true[:, k], color='tab:blue', linewidth=1.5, label="Ext Forcing")
+                
+                ylabel = f"Forcing $f_{{{k}}}$"
+                # If you have specific names for forcing (like 'Temp'), you could map them here
+                axes[ax_idx, 0].set_ylabel(ylabel)
+                axes[ax_idx, 0].grid(True, alpha=0.3)
+                if k == 0: axes[ax_idx, 0].legend(loc='upper right')
+
         plt.xlabel("Time Steps")
-        plt.suptitle(f"Controlled Rollout Analysis - Epoch {step}", fontsize=14)
+        plt.suptitle(f"{prefix.upper()} Rollout Analysis - Step {step}", fontsize=14)
         plt.tight_layout(rect=[0, 0.03, 1, 0.97])
         
         save_path = os.path.join(self.log_dir, f"{prefix}_combined_rollout_{step}.png")
         plt.savefig(save_path)
         plt.close()
+     
