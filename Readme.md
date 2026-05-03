@@ -1,52 +1,10 @@
-Experimentations of Koopman Operator learning.
-Initial deterministic version.
-Possibility of a tensor-train parameterized matrix A. 
-
-Inspired by the papers:
-
-DeSKO - Stability-Assured Robust Control with a Deep Stochastic Koopman Operator 
-
-Chaos as an intermittently forced linear system
-
-Learn a linear system z_{k+1} = A z_k
-where x = d(z) and z = e(z).
-
-This is an encoder-decoder architecture with linear dynamics in the latent space.
-
-DeSKO uses a variational approach, similar to the variational auto-encoder (VAE)
-to consider uncertainty in measurements and dynamics.
-Furthermore, they learn a control system  z_{k+1} = A z_k + Bu(t) 
-by applying random u(t) trajectories during training
-and then use this to apply optimal control techniques (e.g. model predictive control)
-to non-linear systems. 
-Very interesting
-
-HAVOC introduces a forcing term for chaotic systems:
- z_{k+1} = A z_k + Bv(t)
- This enables the learning of chaotic dynamics which can not be represented by a finite-dimensional Koopman operator due to continous spectrum properties.
- 
-
- The code applies a deterministic auto-encoder approach to learn the Koopman-matrix. 
- Tested for several non-linear systems. 
-
- Interesting extensions/application:
-
-    - learn the HAVOC term and apply to the Lorenz system
-      to the best of my knowledge novel as a deep-learning extension to
-      "Chaos as an intermittently forced linear system"
-    
-    - deviate from the koopman operator theory and examine symbolic regression approaches, 
-        i.e. linear -> polynomial latent space evolution + library of nonlinear functions. 
-        Compare to: 
-        "State estimation of a physical system with unknown governing equations"
-    
-    - examine the influence of stochastic dynamics 
-        implemented by \mu_{k+1} = A \mu_k
-        and \z__{k+1} = N(  A \mu_k, A \Sigma_{k} A^T)
-
-
-    - Maybe usable to speed-up simulations by enabling bigger time-steps.
-
-
-
-
+Implementing a libary (and possibly a SDK) for Deep Learning approximations of the Koopman Operator.
+<br>
+The Koopman operator is a relatively fascinating mathematical object that arose in the times of von-Neuman, a time when quantum mechanics had was birthed. The landmark paper was published in 1931 titled "Hamiltonian Systems and Transformation in Hilbert Space."
+<br>
+This remarkable work connects the mathematical machinery used for quantum physics (Hilbert Spaces) to classical systems. The former is well known to be expressed in the language of linear operators on an infinite dimensional space. The latter often refers to non-linear systems which can exhibit chaotic behaviour that is difficult to tame.
+<br>
+Koopman Operator theory transfors the non-linear dynamics on a finite-dimensional state-space into linear dynamics governed by the Koopman operator on infinite dimensional Hilbert space of observables. There are also fruitful connection between this point of view and its dual, the Perron-Frobenius operator, one well known example being the generator of the Fokker-Plank equation.
+<br>
+For many years, Koopman Operator Theory was considered a purely theoretical toy with to practical utility. However, with the 21st century data-driven finite-dimensional approximations of the linear infinite dimensional operator started to become popular. A famous example is dynamic mode decomposition, which arose as a linear approxmation method to study high-dimensional fluid simulations.<br>
+In the recent years, with the rise of deep learning, neural networks can be applied to discovered non-linear lifting functions into a finite-dimensional subspace on which one can appoximate the Koopman operator. In contrast to the 20th century, the theory has found numerous applications, ranging from medical imaging, molecular systems, robotics, finance, quantum mechanics, causality, quantum computing. 
