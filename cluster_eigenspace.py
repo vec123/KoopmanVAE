@@ -5,27 +5,33 @@ import numpy as np
 import joblib
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
-from models.models import ResidualMLP
+from models.models import KoopmanEncoder
 
 def export_clusters():
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    
+    device = "cpu"
     # --- Configuration ---
-    SENSOR_NAME = "ES0031405049538001ML0F"
-    LOG_NAME = f"{SENSOR_NAME}_Multi_KVAE_energy"
+    SENSOR_NAME ="ES0031405047432001AZ0F"
+    LOG_NAME = f"Multi_KVAE_energy_{SENSOR_NAME}"
     LOG_DIR = f"logs/{LOG_NAME}"
     DATASET_PATH = F"data_in/SensorData/{SENSOR_NAME}.csv"
-    epoch = 10000
+    epoch = 5000
     OUTPUT_CSV = os.path.join(LOG_DIR, "clustering_results.csv")
     NUM_CLUSTERS = 2
     # Load Artifacts
-    scaler = joblib.load(os.path.join(LOG_DIR, "scaler.pkl"))
+    try:
+        scaler = joblib.load(os.path.join(LOG_DIR, "scaler.pkl"))
+        use_scaler = True
+    except:
+        use_scaler = False
+    
     decomp = joblib.load(os.path.join(LOG_DIR, f"koopman_eigendecomp_{epoch}.pkl"))
     v_inv = decomp["v_inv"]
     latent_dim = decomp["latent_dim"]
     eigenvalues = decomp["eigenvalues"]
 
-    encoder = ResidualMLP(5, 2 * latent_dim, [128]*3).to(device)
+    
+    encoder = KoopmanEncoder(5, 32, 128, hidden_depth=5)
     encoder.load_state_dict(torch.load(os.path.join(LOG_DIR, f"encoder_{epoch}.pt"), map_location=device))
     encoder.eval()
 
@@ -40,8 +46,10 @@ def export_clusters():
     df['day_cos'] = np.cos(2 * np.pi * df['timestamp'].dt.dayofweek / 7.0)
 
     feat_cols = ['value', 'hour_sin', 'hour_cos', 'day_sin', 'day_cos']
-    X_scaled = torch.tensor(scaler.transform(df[feat_cols].values), dtype=torch.float32).to(device)
-
+    if use_scaler:
+        X_scaled = torch.tensor(scaler.transform(df[feat_cols].values), dtype=torch.float32).to(device)
+    else:
+        X_scaled = torch.tensor(df[feat_cols].values, dtype=torch.float32).to(device)
     # Project to Koopman Eigenspace
     print("Projecting to Eigenspace...")
     with torch.no_grad():

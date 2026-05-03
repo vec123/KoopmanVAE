@@ -78,14 +78,14 @@ def examine_clusters(csv_path, start_date, end_date, selected_masks=None):
 
 if __name__ == "__main__":
     # --- Configuration ---
-    sensor_name = "ES0031405049538001ML0F"
-    LOG_NAME = f"{sensor_name}_Multi_KVAE_energy"
+    SENSOR_NAME ="ES0031405047432001AZ0F"
+    LOG_NAME = f"Multi_KVAE_energy_{SENSOR_NAME}"
     LOG_DIR = f"logs/{LOG_NAME}"
     FILE_PATH = os.path.join(LOG_DIR, "clustering_results.csv")
     
     # Define your zoom window here
-    START = "2025-05-15"
-    END = "2025-06-14"
+    START = "2019-05-15"
+    END = "2030-06-14"
     
     # Optional: specify only certain masks to keep the plot clean
     # e.g., ["cluster_slow", "cluster_fast"]
