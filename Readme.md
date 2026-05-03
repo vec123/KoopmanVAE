@@ -1,4 +1,4 @@
-Implementing a libary (and possibly a SDK) for Deep Learning approximations of the Koopman Operator.
+Hi, Implementing a libary (and possibly a SDK) for Deep Learning approximations of the Koopman Operator.
 <br>
 The Koopman operator is a relatively fascinating mathematical object that arose in the times of von-Neuman, a time when quantum mechanics had was birthed. The landmark paper was published in 1931 titled "Hamiltonian Systems and Transformation in Hilbert Space."
 <br>
