@@ -14,3 +14,5 @@ For many years, Koopman Operator Theory was considered a purely theoretical toy 
 <br>
 <br>
 In the recent years, with the rise of deep learning, neural networks can be applied to discovered non-linear lifting functions into a finite-dimensional subspace on which one can appoximate the Koopman operator. By now the theory has found numerous applications, ranging from medical imaging, molecular systems, robotics, finance, quantum mechanics, causality, quantum computing. All these applications share a common theme which will be explained and implemented in the following. 
+<br>
+<br>

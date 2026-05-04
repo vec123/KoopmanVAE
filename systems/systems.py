@@ -47,41 +47,9 @@ class BaseSystem:
             for i in range(1, self.state_dim, 2):
                 sig[i] = noise_lvl
             return sig
-        
-class CartpoleSystem(BaseSystem):
-    def __init__(self, linearized=False, params=None, init_mean=None, init_range=None):
-        p = params or (1.0, 0.1, 0.5, 9.81, 0.1)
-        m = init_mean or [0.0, 0.0, (1.57 if linearized else 0.0), 0.0]
-        r = init_range or [0.1, 0.1, 0.2, 0.1]
-        
-        if linearized:
-            name, labels, obs_dim = "cartpole_linear", [r"$x$", r"$\dot{x}$", r"$\theta$", r"$\dot{\theta}$"], 4
-        else:
-            name, labels, obs_dim = "cartpole", [r"$x$", r"$\dot{x}$", r"$\sin\theta$", r"$\cos\theta$", r"$\dot{\theta}$"], 5
-            
-        super().__init__(name, 4, 1, labels, p, 15.0, m, r, obs_dim)
-        self.linearized = linearized
-
-    def observe(self, state):
-        if self.linearized: return np.array(state)
-        x, x_dot, theta, theta_dot = state
-        return np.array([x, x_dot, np.sin(theta), np.cos(theta), theta_dot])
-
-    def ode(self, state, t, u, process_noise):
-        f = cartpole_linear if self.linearized else cartpole_controlled
-        return f(state, t, u, *self.params, process_noise=process_noise)
 
 
-class InvertedPendulumSystem(BaseSystem):
-    def __init__(self, params=None, init_mean=None, init_range=None):
-        p = params or (1.0, 1.0, 9.81, 0.1)
-        m = init_mean or [0.0, 0.0]
-        r = init_range or [np.pi, 0.0] # Default: any angle, zero velocity
-        super().__init__("pendulum", 2, 1, [r"$\theta$", r"$\omega$"], p, 2.0, m, r)
 
-    def ode(self, state, t, u, process_noise):
-        return inverted_pendulum_controlled(state, t, u, *self.params, process_noise=process_noise)
-    
 class DuffingSpringSystem(BaseSystem):
     def __init__(self, params=None, init_mean=None, init_range=None):
         p = params or (0.1, 1.0, 5.0)
@@ -104,6 +72,8 @@ class CoupledMassSystem(BaseSystem):
 
 class HVACSystem(BaseSystem):
     def __init__(self, nonlinear=True, params=None, init_mean=None, init_range=None):
+        self.state_dim = 4
+        self.control_dim = 2
         if nonlinear:
             p = params or (0.05, 0.8, 5.67e-8, 5000.0)
             name = "hvac_nonlinear"

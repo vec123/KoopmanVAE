@@ -43,14 +43,14 @@ def main():
     normalize_scale = False
     concat_true = True
     encode_control = False
-    use_forcing = True
-    use_control = False
+    use_forcing = False
+    use_control = True
     learn_forcing = False
 
     tensor_train_koopman = False  
     stochastic = True
 
-    log_name = "Learned2_Forced_Multi_KVAE_energy" 
+    log_name = "Learned_Forced_Multi_KVAE_energy" 
     DATASET = "ES0031405047432001AZ0F"
     DATASET = "ES0031405049538001ML0F"
     
@@ -79,7 +79,7 @@ def main():
                   
     TIME_COL = "timestamp"                      
 
-    FORCING_COLS = ["tm_C", "rs_wm2"]
+    FORCING_COLS = ["tm_C"]
     FORCING_TIME_COL = "date"
 
     
@@ -106,10 +106,21 @@ def main():
     df['day_sin'] = np.sin(2 * np.pi * df[TIME_COL].dt.dayofweek / 7.0)
     df['day_cos'] = np.cos(2 * np.pi * df[TIME_COL].dt.dayofweek / 7.0)
 
-    
+    #  Month of year (1-12)
+    # Subtract 1 so it ranges from 0-11 for the calculation
+    df['month_sin'] = np.sin(2 * np.pi * (df[TIME_COL].dt.month - 1) / 12.0)
+    df['month_cos'] = np.cos(2 * np.pi * (df[TIME_COL].dt.month - 1) / 12.0)
+
+    # Season
+    # 0: Winter, 1: Spring, 2: Summer, 3: Autumn
+    # Using (month % 12 // 3) is a standard way to align Dec-Jan-Feb as Winter
+    df['season'] = (df[TIME_COL].dt.month % 12 // 3)
+    df['season_sin'] = np.sin(2 * np.pi * df['season'] / 4.0)
+    df['season_cos'] = np.cos(2 * np.pi * df['season'] / 4.0)
+
     df['u'] = 0*np.cos(2 * np.pi * df[TIME_COL].dt.dayofweek / 7.0)
     # Define all columns to be used as state
-    FEATURE_COLS = [TARGET_COL, 'hour_sin', 'hour_cos', 'day_sin', 'day_cos']
+    FEATURE_COLS = [TARGET_COL, 'hour_sin', 'hour_cos', 'day_sin', 'day_cos','month_sin', 'month_cos' ]
 
 
     # We use a 'left' merge on timestamps so the result matches df exactly
