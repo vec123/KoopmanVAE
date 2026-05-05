@@ -1,48 +1,29 @@
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler
+import joblib
 
 class TimeSeriesProcessor:
-    """
-    Modular engine for temporal feature engineering. 
-    Maps time components to sin/cos transformations.
-    """
+    """Modular engine for temporal feature engineering."""
     CYCLE_DEFS = {
-        'second':       (lambda t: t.dt.second, 60),
-        'minute':       (lambda t: t.dt.minute, 60),
-        'hour':         (lambda t: t.dt.hour, 24),
-        'day_of_week':  (lambda t: t.dt.dayofweek, 7),
+        'second': (lambda t: t.dt.second, 60),
+        'minute': (lambda t: t.dt.minute, 60),
+        'hour': (lambda t: t.dt.hour, 24),
+        'day_of_week': (lambda t: t.dt.dayofweek, 7),
         'day_of_month': (lambda t: t.dt.day - 1, 31),
-        'month':        (lambda t: t.dt.month - 1, 12),
-        'season':       (lambda t: (t.dt.month % 12 // 3), 4),
-        'year':         (lambda t: t.dt.dayofyear - 1, 366)
+        'month': (lambda t: t.dt.month - 1, 12),
+        'year': (lambda t: t.dt.dayofyear - 1, 366)
     }
 
-    def __init__(self, target_col):
-        self.target_col = target_col
-        self.scaler = StandardScaler()
-        self.f_scaler = StandardScaler()
-
     def add_cyclic_features(self, df, time_col, enabled_features):
-        """
-        Calculates sin/cos pairs for all enabled time cycles.
-        """
         df = df.copy()
-        # Ensure timestamp is datetime objects
         t = pd.to_datetime(df[time_col])
-
         for feature in enabled_features:
-            if feature not in self.CYCLE_DEFS:
-                print(f"Warning: Temporal feature '{feature}' not recognized.")
-                continue
-                
-            getter, period = self.CYCLE_DEFS[feature]
-            values = getter(t)
-            
-            # Use standard naming convention for predictable column access
-            df[f'{feature}_sin'] = np.sin(2 * np.pi * values / period)
-            df[f'{feature}_cos'] = np.cos(2 * np.pi * values / period)
-            
+            if feature in self.CYCLE_DEFS:
+                getter, period = self.CYCLE_DEFS[feature]
+                values = getter(t)
+                df[f'{feature}_sin'] = np.sin(2 * np.pi * values / period)
+                df[f'{feature}_cos'] = np.cos(2 * np.pi * values / period)
         return df
 
     def get_feature_names(self, enabled_features):
@@ -52,3 +33,34 @@ class TimeSeriesProcessor:
             if f in self.CYCLE_DEFS:
                 names.extend([f"{f}_sin", f"{f}_cos"])
         return names
+
+class ScalingProcessor:
+    def __init__(self):
+        self.x_scaler = StandardScaler()
+        self.u_scaler = StandardScaler()
+        self.f_scaler = StandardScaler()
+        self.is_fitted = False
+
+    def fit(self, x_data, u_data=None, f_data=None):
+        
+        self.x_scaler.fit(x_data)
+        
+        if u_data is not None and u_data.shape[1] > 0:
+            self.u_scaler.fit(u_data)
+            
+        if f_data is not None and f_data.shape[1] > 0:
+            self.f_scaler.fit(f_data)
+            
+        self.is_fitted = True
+
+    def transform(self, x, u=None, f=None):
+        if not self.is_fitted:
+            return x, u, f
+        
+        x_scaled = self.x_scaler.transform(x)
+        
+        # Scale u/f only if they have width > 0
+        u_scaled = self.u_scaler.transform(u) if (u is not None and u.shape[1] > 0) else u
+        f_scaled = self.f_scaler.transform(f) if (f is not None and f.shape[1] > 0) else f
+        
+        return x_scaled, u_scaled, f_scaled

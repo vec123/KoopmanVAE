@@ -1,7 +1,8 @@
+import torch.nn as nn
 import torch
 import numpy as np
 from torch.optim.swa_utils import AveragedModel, get_ema_multi_avg_fn
-from .losses import compute_spectral_penalty, compute_vae_kl, compute_forcing_reg
+from .losses import spectral_loss, compute_vae_kl, forcing_regularization
 
 class KoopmanTrainer:
     def __init__(self, system_bundle, config, dataloaders, device="cuda"):

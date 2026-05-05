@@ -1,0 +1,7 @@
+defaults:
+  - model: base_vae
+  - _self_
+
+# System/Infrastructure
+device: "cuda"
+backend: "torch"

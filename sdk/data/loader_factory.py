@@ -1,80 +1,86 @@
+from torch.utils.data import DataLoader
+from loaders import TrajectoryLoader, NativeLoader
+from processors import TimeSeriesProcessor, ScalingProcessor
+from datasets import ControlledWindowDataset
 import pandas as pd
 import numpy as np
-import torch
-from torch.utils.data import DataLoader, Subset
-from .processors import TimeSeriesProcessor
-from .datasets import KoopmanDataset
 
-class KoopmanDataFactory:
-    def __init__(self, config):
-        """
-        config: A dictionary or object containing:
-            - state_cols, forcing_cols, target_col
-            - window_size, stride, batch_size, val_split
-        """
-        self.cfg = config
-        self.processor = TimeSeriesProcessor(config.target_col)
+class DataPipelineFactory:
+    @staticmethod
+    def create_pipeline(directories, config):
+        # 1. Fetching logic - uses TrajectoryLoader
+        t_col = config.get('time_col', 'time')  # Define it here!
+        s_cols = config['state_cols']
+        c_cols = config.get('control_cols', [])
+        f_cols = config.get('forcing_cols', [])
 
-    def create_loaders(self, sensor_path, weather_path):
-        # 1. Load CSVs
-        df_sensor = pd.read_csv(sensor_path)
-        df_weather = pd.read_csv(weather_path)
-
-        # 2. Synchronize Time
-        df_sensor['timestamp'] = pd.to_datetime(df_sensor['timestamp'])
-        df_weather['date'] = pd.to_datetime(df_weather['date'])
-
-        # Left join sensor data with weather data on time
-        df = pd.merge_asof(
-            df_sensor.sort_values('timestamp'),
-            df_weather.sort_values('date'),
-            left_on='timestamp',
-            right_on='date',
-            direction='nearest'
+        # 2. FETCH DATA
+        loader = TrajectoryLoader(
+            state_cols=s_cols, 
+            control_cols=c_cols,
+            forcing_cols=f_cols,
+            time_col=t_col
         )
+        raw_trajs = loader.fetch_data(directories)
 
-        # 3. Feature Engineering
-        df = self.processor.add_cyclic_date_features(df, 'timestamp')
+        # 3. Handle Time
+        start_date = pd.Timestamp("2024-01-01 00:00:00")
+        time_processor = TimeSeriesProcessor()
+        for df in raw_trajs:
+            df[t_col] = start_date + pd.to_timedelta(df[t_col], unit='s')
         
-        # Handle resolution gaps
-        df = df.ffill().bfill()
-
-        # 4. Extraction & Scaling
-        # We scale the state and forcing, but usually keep control 'u' as is 
-        # or scale it separately if it's continuous.
-        x_raw = df[self.cfg.state_cols].values
-        f_raw = df[self.cfg.forcing_cols].values
+        processed_trajs = [
+            time_processor.add_cyclic_features(df, t_col, config['cyclic_features']) 
+            for df in raw_trajs
+        ]
         
-        # If 'u' is not in CSV, we assume it's a zero-vector or a specific column
-        u_raw = df[['u']].values if 'u' in df.columns else np.zeros((len(df), 1))
+        # 4. Feature Aggregation
+        cyclic_names = time_processor.get_feature_names(config['cyclic_features'])
+        extended_states = s_cols + cyclic_names
+        # Combine Control and Forcing into a single "Action/External" vector for the model
+        external_inputs = c_cols + f_cols 
 
-        # Fit and transform
-        x_scaled = self.processor.scaler.fit_transform(x_raw)
-        f_scaled = self.processor.f_scaler.fit_transform(f_raw) # Optional scaling for forcing
+        # 5. Split and Scale
+        train_dfs, val_dfs = loader.split_trajectories(processed_trajs, config.get('val_ratio', 0.2))
+        
+        # Scaling (Refined for three-way split) ---
+        scaler = ScalingProcessor()
+        if config.get('scale', True):
+            # Extract lists safely
+            c_cols = config.get('control_cols', [])
+            f_cols = config.get('forcing_cols', [])
+            
+            all_x = np.concatenate([df[extended_states].values for df in train_dfs])
+            
+            # Extract values only if columns exist, else pass None/Empty to scaler
+            all_u = np.concatenate([df[c_cols].values for df in train_dfs]) if c_cols else None
+            all_f = np.concatenate([df[f_cols].values for df in train_dfs]) if f_cols else None
+            
+            # Your ScalingProcessor.fit should now take (x, u, f)
+            scaler.fit(all_x, all_u, all_f)
 
-        # 5. Dataset Creation
-        full_dataset = KoopmanDataset(
-            x_data=x_scaled,
-            u_data=u_raw,
-            f_data=f_scaled,
-            window_size=self.cfg.window_size,
-            stride=self.cfg.stride
-        )
+        # --- 6. Dataset creation (Symmetrical Fix) ---
+        # Define common parameters to avoid repetition errors
+        ds_kwargs = {
+            "state_cols": extended_states,
+            "control_cols": config.get('control_cols', []),
+            "forcing_cols": config.get('forcing_cols', []),
+            "subseq_len": config['subseq_len'],
+            "stride": config['stride'],
+            "scaler": scaler
+        }
 
-        # 6. Train/Val Split
-        n_val = int(len(full_dataset) * self.cfg.val_split)
-        indices = torch.randperm(len(full_dataset)).tolist()
-        train_idx, val_idx = indices[n_val:], indices[:n_val]
+        train_ds = ControlledWindowDataset(trajectories=train_dfs, **ds_kwargs)
+        val_ds   = ControlledWindowDataset(trajectories=val_dfs, **ds_kwargs)
 
-        train_loader = DataLoader(
-            Subset(full_dataset, train_idx), 
-            batch_size=self.cfg.batch_size, 
-            shuffle=True
-        )
-        val_loader = DataLoader(
-            Subset(full_dataset, val_idx), 
-            batch_size=self.cfg.batch_size, 
-            shuffle=False
-        )
+        # 2. Batching logic - chooses between Torch and Native
+        if config.get('backend') == 'torch':
+            from torch.utils.data import DataLoader
+            train_loader = DataLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
+            val_loader = DataLoader(val_ds, batch_size=config['batch_size'])
+        else:
+            # Swap to NativeLoader for Numpy/Jax
+            train_loader = NativeLoader(train_ds, batch_size=config['batch_size'], shuffle=True)
+            val_loader = NativeLoader(val_ds, batch_size=config['batch_size'], shuffle=False)
 
-        return train_loader, val_loader
+        return train_loader, val_loader, scaler

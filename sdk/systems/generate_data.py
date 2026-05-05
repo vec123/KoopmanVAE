@@ -1,17 +1,20 @@
 import os
 import sys
+from dotenv import load_dotenv
 import pandas as pd
 import matplotlib.pyplot as plt
 import numpy as np
 from registry import SYSTEM_REGISTRY
 from simulators import simulate_euler_maruyama
 
+load_dotenv()
+
 def run(target_systems=None):
     """
     Generates trajectory data and plots for specified systems.
     If target_systems is None, generates data for all systems in the registry.
     """
-    base_dir = "outputs"
+    base_dir = os.getenv("DATASET_FOLDER")
     os.makedirs(f"{base_dir}/csv", exist_ok=True)
     os.makedirs(f"{base_dir}/plots", exist_ok=True)
 
@@ -34,7 +37,7 @@ def run(target_systems=None):
 
         print(f" -> Processing {name}...")
 
-        # 1. Simulate: Returns X (N_traj, T, D_obs), U (N_traj, T, D_control)
+        #  Simulate: Returns X (N_traj, T, D_obs), U (N_traj, T, D_control)
         try:
             X, U = simulate_euler_maruyama(
                 sys_obj, 
@@ -61,7 +64,7 @@ def run(target_systems=None):
         u_labels = [f"u_{j}" for j in range(d_control)]
         cols = ["time"] + sys_obj.labels + u_labels
 
-        # Summary plot (overlapping first state of all trajectories)
+        #Summary plot (overlapping first state of all trajectories)
         #fig_sum, ax_sum = plt.subplots(figsize=(12, 6))
 
         for i in range(n_traj):
@@ -118,7 +121,7 @@ if __name__ == "__main__":
     # Check for command line arguments to target specific systems
     # Usage: python generate_dataset.py cartpole lorenz
     targets = sys.argv[1:] if len(sys.argv) > 1 else None
-    target_systems=["hvac_nonlinear", "hvac_linear"]
+    target_systems=["hvac_linear"]
     run(target_systems=target_systems)
 
     """ 
