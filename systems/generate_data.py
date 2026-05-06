@@ -9,7 +9,7 @@ from simulators import simulate_euler_maruyama
 
 load_dotenv()
 
-def run(target_systems=None):
+def run(target_systems=None, n_traj =10):
     """
     Generates trajectory data and plots for specified systems.
     If target_systems is None, generates data for all systems in the registry.
@@ -41,7 +41,7 @@ def run(target_systems=None):
         try:
             X, U = simulate_euler_maruyama(
                 sys_obj, 
-                n_traj=10, 
+                n_traj=n_traj, 
                 seq_len=cfg["seq_len"], 
                 dt=cfg["dt"], 
                 substeps=cfg["substeps"],
@@ -121,8 +121,8 @@ if __name__ == "__main__":
     # Check for command line arguments to target specific systems
     # Usage: python generate_dataset.py cartpole lorenz
     targets = sys.argv[1:] if len(sys.argv) > 1 else None
-    target_systems=["hvac_linear"]
-    run(target_systems=target_systems)
+    target_systems=["lorenz"]
+    run(target_systems=target_systems, n_traj =100)
 
     """ 
     python

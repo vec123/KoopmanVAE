@@ -8,6 +8,7 @@ from training.monitor import KoopmanMonitor
 from training.losses import KoopmanLossManager
 from torch_ema import ExponentialMovingAverage
 
+import time
 
 torch.set_float32_matmul_precision('high')
 
@@ -26,13 +27,56 @@ class KoopmanTrainer:
         self.stochastic = getattr(self.cfg.train, 'stochastic', False)
         self.horizon = config.train.horizon
         self.val_interval = config.train.val_interval 
-        self.save_interval = config.train.save_interval # <--- ADDED FIX HERE
+        self.save_interval = config.train.save_interval 
+        self.concat_true = config.train.concat_true 
         self.ema = ExponentialMovingAverage(self.models.parameters(), decay=config.train.ema_decay) if config.train.use_ema else None
         
         self.best_val_loss = float('inf')
 
     @torch.compile(mode="reduce-overhead")
     def rollout(self, z, x_init, U, E, steps: int):
+        B_batch, Dz = z.shape
+        Dx = x_init.shape[-1]
+        
+        # Pre-fetch modules to avoid ModuleDict overhead in loop
+        model_A = self.models['A']
+        model_B = self.models['B'] if 'B' in self.models else None
+        model_E = self.models['E'] if 'E' in self.models else None
+        forcing_net = self.models['forcing_net'] if 'forcing_net' in self.models else None
+
+        # Pre-allocate the entire output tensor
+        z_preds = torch.empty((B_batch, steps + 1, Dz + Dx), device=z.device, dtype=z.dtype)
+        
+        if self.concat_true:
+            current_state = torch.cat([z, x_init], dim=-1)
+        else:
+            current_state = z
+        z_preds[:, 0] = current_state
+        v_r_list = []
+
+        for i in range(steps):
+            #  Linear step
+            next_state = model_A(current_state)
+            
+            #  Additive terms (Control/Forcing)
+            if model_B is not None and U is not None:
+                next_state += model_B(U[:, i])
+            
+            if model_E is not None and E is not None:
+                next_state += model_E(E[:, i])
+                
+            if forcing_net is not None:
+                v = forcing_net(current_state)
+                v_r_list.append(v)
+                next_state += v
+                
+            z_preds[:, i + 1] = next_state
+            current_state = next_state # Feedback for next step
+            
+        return z_preds, v_r_list
+
+    @torch.compile(mode="reduce-overhead")
+    def rollout_solid(self, z, x_init, U, E, steps: int):
         B_batch, Dz = z.shape
         Dx = x_init.shape[-1]
         
@@ -51,6 +95,7 @@ class KoopmanTrainer:
         v_r_list = []
 
         for i in range(steps):
+
             z_combined = torch.cat([current_z, current_x], dim=-1)
             
             # Apply Linear Dynamics
@@ -77,7 +122,87 @@ class KoopmanTrainer:
             
         return z_preds, v_r_list
 
-    def forward_logic(self, X, U, E, is_train=True):
+    def forward_logic(self, X, U, E, is_train=True, monitor_time = True):
+        B, T, Dx = X.shape
+        h = self.horizon if is_train else T - 1
+        
+        # Window slicing (Keep as is)
+        if monitor_time:
+            t0 = time.time()
+        t_start = torch.randint(0, T - h, (1,)).item() if is_train else 0
+        x_win = X[:, t_start : t_start + h + 1]
+        u_win = U[:, t_start : t_start + h]
+        e_win = E[:, t_start : t_start + h] if E is not None else None
+
+        #  Parallel Processing: Encode states and controls
+        if monitor_time:
+            t1 = time.time()
+        z_enc, mu, logstd = self.encode_states(x_win)
+        u_eff, u_rec_3d = self._process_control(x_win, u_win) 
+
+        # Rollout (Optimized version from previous discussion)
+        # z_preds: [B, h+1, Dz+Dx]
+        if monitor_time:
+            t2 = time.time()
+        z_preds, v_r = self.rollout(z_enc[:, 0], x_win[:, 0], u_eff, e_win, steps=h)
+
+        # BATCHED DECODING (The Speedup)
+        # Combine both paths into one large batch for the decoder
+        z_vae_combined = torch.cat([z_enc, x_win], dim=-1) # [B, h+1, Dz+Dx]
+        
+        # Flatten both to [Batch * Time, Dim] and stack
+        # Shape: [2 * B * (h+1), Dz+Dx]
+        combined_latents = torch.cat([
+            z_preds.reshape(-1, z_preds.shape[-1]),
+            z_vae_combined.reshape(-1, z_vae_combined.shape[-1])
+        ], dim=0)
+
+        if monitor_time:
+            t3 = time.time()
+        # Single Decoder Call
+        all_recs = self.models['decoder'](combined_latents)
+
+        # Split the results back into their respective paths
+        split_idx = B * (h + 1)
+        x_rec_rollout_flat = all_recs[:split_idx]
+        x_rec_vae_flat = all_recs[split_idx:]
+        
+        if monitor_time:
+            t4 = time.time()
+        # 5. Control Loss
+        if u_rec_3d is not None:
+            loss_ctrl = F.mse_loss(u_rec_3d, u_win)
+        else:
+            # Use a buffer or pre-allocated zero to avoid sync
+            loss_ctrl = torch.tensor(0.0, device=self.device)
+
+        if monitor_time:
+            t4 = time.time()
+
+        if monitor_time:
+            if (t4-t0) > 0.05:
+                print(f"Forward Lags: slicing: {t1-t0:.3f}s | encoding: {t2-t1:.3f}s | rollout: {t3-t2:.3f}s| recon rollout: {t4-t3:.3f}s")
+            else:
+                "forward fast"
+        return {
+            'z_preds': z_preds,
+            'z_enc': z_vae_combined,
+            'x_rec': x_rec_vae_flat, 
+            'x_rec_3d': x_rec_rollout_flat.view(B, h + 1, Dx), 
+            'x_true': x_win,
+            'u_true': u_win,
+            'f_true': e_win,
+            'u_rec': u_rec_3d,
+            'mu': mu, 
+            'logstd': logstd, 
+            'v_r': v_r,
+            'A_op': self.models['A'],
+            'encoder': self.models['encoder'], 
+            'decoder': self.models['decoder'],
+            'loss_control': loss_ctrl
+        }
+
+    def forward_logic_old(self, X, U, E, is_train=True):
         B, T, Dx = X.shape
         h = self.horizon if is_train else T - 1
         
@@ -126,14 +251,30 @@ class KoopmanTrainer:
             'loss_control': loss_ctrl
         }
 
-    def train_step(self, X, U, E):
+    def train_step(self, X, U, E, monitor_time = True):
+        if monitor_time:
+            t0 = time.time()
+
         self.models.train()
-        res = self.forward_logic(X, U, E, is_train=True)
-        loss, logs = self.loss_manager(res, res['v_r'], res['mu'], res['logstd'], self.device)
-        
-        self.optimizer.zero_grad()
+        with torch.amp.autocast('cuda', dtype=torch.float16):
+            res = self.forward_logic(X, U, E, is_train=True)
+            if monitor_time:
+                t1 = time.time()
+            loss, logs = self.loss_manager(res, res['v_r'], res['mu'], res['logstd'])
+            if monitor_time:
+                t2 = time.time()
+
+        self.optimizer.zero_grad(set_to_none=True)
         loss.backward()
         self.optimizer.step()
+
+        if monitor_time:
+                t3 = time.time()
+
+        if monitor_time:
+            if (t3-t0) > 0.2:
+                print(f"Train Step Lags: Fwd: {t1-t0:.3f}s | Loss: {t2-t1:.3f}s | Opt: {t3-t2:.3f}s")
+                
         if self.ema: 
             self.ema.update()
         return loss.item(), logs, res
@@ -154,7 +295,7 @@ class KoopmanTrainer:
             for batch in self.val_loader:
                 X, U, E = [b.to(self.device, non_blocking=True) for b in batch]
                 last_res = self.forward_logic(X, U, E, is_train=False)
-                _, step_logs = self.loss_manager(last_res, last_res['v_r'], last_res['mu'], last_res['logstd'], self.device)
+                _, step_logs = self.loss_manager(last_res, last_res['v_r'], last_res['mu'], last_res['logstd'])
                 for k, v in step_logs.items():
                     val_logs[k] = val_logs.get(k, 0.0) + v
 
@@ -169,7 +310,7 @@ class KoopmanTrainer:
                 prefix="val",
                 u_true=last_res.get('u_true'),
                 u_rec=last_res.get('u_rec'),
-                e_true=last_res.get('e_true')
+                f_true=last_res.get('f_true')
             )
         return avg_val
 
@@ -206,6 +347,7 @@ class KoopmanTrainer:
                         epoch, 
                         prefix="train",
                         u_true=t_res.get('u_true'),
+                        f_true=t_res.get('f_true'),
                         u_rec=t_res.get('u_rec'),
                         e_true=t_res.get('e_true')
                     )
@@ -277,17 +419,3 @@ class KoopmanTrainer:
                     u_rec_3d = u_rec_flat.reshape(B, H, Du)
                     
             return u_eff, u_rec_3d
-
-    def rollout_slow(self, z, U, E, steps):
-        z_preds, v_r_list = [z], []
-        for i in range(steps):
-            z_next = self.models['A'](z)
-            if 'B' in self.models and U is not None: z_next += self.models['B'](U[:, i])
-            if 'E' in self.models and E is not None: z_next += self.models['E'](E[:, i])
-            if 'forcing_net' in self.models:
-                v = self.models['forcing_net'](z)
-                v_r_list.append(v)
-                z_next += v
-            z = z_next
-            z_preds.append(z)
-        return torch.stack(z_preds, dim=1), v_r_list

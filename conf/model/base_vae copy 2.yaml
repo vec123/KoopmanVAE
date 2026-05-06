@@ -1,0 +1,58 @@
+# --- Experiment Metadata ---
+exp_name: "koopman_exp"
+checkpoint_dir: "./checkpoints"
+
+
+# --- Model Architecture ---
+dims:
+  state_dim: 1
+  latent_dim: 64
+  control_dim: 0
+  forcing_dim: 0
+  hidden_dim: 128
+  hidden_depth: 3
+
+# --- Data Pipeline ---
+data:
+  subseq_len: 168
+  stride: 10
+  cyclic_features: ["hour", "day_of_week"] #
+  state_cols: ['value']
+  control_cols: []
+  forcing_cols: []
+  scale: false
+  val_ratio: 0.2
+  split_mode: 'window'
+  time_col: 'timestamp'
+
+
+# --- Training & Optimization ---
+train:
+  lr: 1e-3
+  batch_size: 128
+  backend: 'torch'
+  use_ema: true
+  ema_decay: 1
+  val_interval: 100
+  save_interval: 100
+  min_entropy_threshold: 1.0
+  device: 'cuda'
+  horizon: 160
+  plot_forcing_mode: "dimensions"
+  stochastic: True
+  encode_control: False
+  concat_true: True
+# --- Physics & Loss Weights (The Coefficients) ---
+weights:
+  gamma_1: 10.0        # Koopman Consistency: ||z_pred - z_enc||
+  gamma_2: 10.0        # State Reconstruction: ||x_pred - x_true||
+  rollout_decay: 0.9
+  epsilon_1: 10.0      # Encoder Decoder Reconstruction init
+  epsilon_2: 10.0     # Encoder Decoder Reconstruction all
+  beta_kl: 0.0     # KL Divergence: Latent regularization
+  alpha_ent: 0.1      # Entropy: Prevents latent collapse
+  lambda_vamp: 0.0    # VAMP-2: Maximizes kinetic variance
+  delta_spec: 0.0  # Spectral Penalty: Stability (eigs <= 1)
+  zero_gain: 0.0      # Zero-State: Physical origin mapping
+  epsilon_3: 0.0      # Control Reconstruction
+  lambda_forcing: 0.1 # Forcing Regularization (HAVOK v_r)

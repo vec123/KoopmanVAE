@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from conf.config import KoopmanConfig, DataConfig, ModelDims, LossWeights, TrainConfig
 from models.models import KoopmanEncoder, LinearMatrix,ResidualMLP
+from models.model_inits import apply_system_init
 from training.engine import KoopmanTrainer
 from data.loader_factory import DataPipelineFactory
 
@@ -31,7 +32,7 @@ def main(cfg: DictConfig):
     # Data Pipeline
     # Hydra provides dot-notation (cfg.model.lr)
     # os.getenv handles the local machine infrastructure
-    dataset_path = os.getenv("DATASET_PATH")
+    dataset_path = os.getenv("DATASET_W_METEO_PATH")
     
     if not dataset_path:
         raise ValueError("DATASET_PATH not found. Ensure your .env file is set up.")
@@ -82,6 +83,8 @@ def main(cfg: DictConfig):
         )
     }
     
+    apply_system_init(system_bundle, mode='gaussian')
+
     # Control Logic
     if koopman_cfg.train.encode_control:
         # Effective control dimension is dz if using encoder

@@ -32,21 +32,24 @@ class DataPipelineFactory:
         raw_trajs = loader.fetch_data(directories)
 
         # 3. Handle Time
-        start_date = pd.Timestamp("2024-01-01 00:00:00")
+        start_date = pd.Timestamp("2020-01-01 00:00:00")
         time_processor = TimeSeriesProcessor()
 
         for df in raw_trajs:
-            if verbose:
-                print("raw df: ", df)
-            # Check if the column is already strings/datetimes or numeric
+            # Basic cleanup: remove rows where time column might be NaN/empty
+            df.dropna(subset=[t_col], inplace=True)
+
             if pd.api.types.is_numeric_dtype(df[t_col]):
                 # Handle numeric offsets (0.0, 60.0...)
                 df[t_col] = start_date + pd.to_timedelta(df[t_col], unit='s')
             else:
-                # Handle string timestamps ("2024-05-01...")
-                df[t_col] = pd.to_datetime(df[t_col])
+                # Handle string timestamps with varying precision
+                # 'format="mixed"' is available in pandas 2.0+ 
+                # It handles different formats (with/without ms) in the same column
+                df[t_col] = pd.to_datetime(df[t_col], format='mixed')
+            
             if verbose:
-                print("dataset with datetime: ", df)
+                print(f"Dataset processed. Time range: {df[t_col].min()} to {df[t_col].max()}")
 
         processed_trajs = [
             time_processor.add_cyclic_features(df, t_col, config.cyclic_features) 
