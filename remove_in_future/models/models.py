@@ -356,7 +356,7 @@ class LinearKoopmanEncoder(torch.nn.Module):
                 std = torch.nn.functional.softplus(raw_std_output) + 1e-7
                 logstd = torch.log(std)
                 
-                return mu, logstd
+                return torch.cat([mu, logstd], dim=-1)
             
 # --------------------
 class LinearMatrix(nn.Module):

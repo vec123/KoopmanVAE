@@ -1,0 +1,13 @@
+defaults:
+  - model: base_vae
+  - _self_
+
+hydra:
+  job:
+    chdir: True
+    
+  run:
+    dir: ./experiments/${now:%Y-%m-%d}/${now:%H-%M-%S}
+# System/Infrastructure
+device: "cuda"
+backend: "torch"

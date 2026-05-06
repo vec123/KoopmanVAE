@@ -3,51 +3,66 @@ from scipy.integrate import odeint
 
 
 
-def generate_trajectories_euler_maruyama(
+def simulate_euler_maruyama(
     sys, 
     n_traj=10, 
     seq_len=100, 
     dt=0.02,
     substeps=5,
-    process_noise=0.01, 
-    control_noise=0.0,
+    u_time_scale=(0.0, 0.0), # (min_hold_time, max_hold_time)
+    process_noise_std=0.01, 
+    control_noise_std=0.01,
     control=True
 ):
     inner_dt = dt / substeps
-    sigma_p = sys.get_sigma(process_noise)
-    
     all_x, all_u = [], []
+    
+    min_hold, max_hold = u_time_scale
+
     for _ in range(n_traj):
         state = np.array(sys.get_initial_state())
-        # Ensure raw control is always 2D: (seq_len, control_dim)
-        u_raw_traj = (np.random.rand(seq_len, sys.control_dim) - 0.5) * 2 * sys.u_scale
-        
         obs_history = []
         u_applied_history = []
         
+        # Control persistence variables
+        current_u = np.zeros(sys.control_dim)
+        hold_timer = 0.0
+        
         for i in range(seq_len):
+            # 1. Update Control based on timescale
+            if control:
+                if hold_timer <= 0:
+                    # Time to pick a new control value
+                    current_u = (np.random.rand(sys.control_dim) - 0.5) * 2 * sys.u_scale
+                    # Pick how long to hold it (in seconds)
+                    hold_duration = np.random.uniform(min_hold, max_hold)
+                    hold_timer = hold_duration
+                
+                hold_timer -= dt # Decrement timer by the step size
+            else:
+                current_u = np.zeros(sys.control_dim)
+
+            # 2. Observe and Store
             obs_history.append(sys.observe(state))
-            
-            # 1. Format and handle control toggle
-            u_nominal = sys.format_control(u_raw_traj[i])
-            if not control:
-                u_nominal = np.zeros(sys.control_dim) # Use np.zeros to keep dimensions
-            
-            # 2. FORCE u_nominal to be an array so the shape is (control_dim,)
-            u_nominal = np.atleast_1d(u_nominal)
+            u_nominal = sys.format_control(current_u)
             u_applied_history.append(u_nominal)
             
             # 3. Physics Substepping
             for _ in range(substeps):
-                u_noisy = u_nominal + np.random.normal(0, control_noise, size=sys.control_dim)
-                derivs = sys.ode(state, i*dt, u_noisy, process_noise=[0]*sys.state_dim)
+                p_noise = np.random.normal(0, process_noise_std, size=sys.state_dim) * np.sqrt(inner_dt)
+                c_noise = np.random.normal(0, control_noise_std, size=sys.control_dim)
                 
-                state += np.array(derivs) * inner_dt + sigma_p * np.random.normal(0, np.sqrt(inner_dt), sys.state_dim)
+                derivs = sys.ode(
+                    state, 
+                    i * dt, 
+                    u_nominal, 
+                    process_noise=p_noise / inner_dt, 
+                    control_noise=c_noise
+                )
+                
+                state += np.array(derivs) * inner_dt
             
         all_x.append(np.array(obs_history))
         all_u.append(np.array(u_applied_history))
         
-    # Final check: return as (N, T, D)
     return np.array(all_x), np.array(all_u)
-
-
