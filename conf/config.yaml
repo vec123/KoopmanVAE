@@ -1,5 +1,5 @@
 defaults:
-  - model: base_vae
+  - model: lorenz
   - _self_
 
 hydra:

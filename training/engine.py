@@ -33,7 +33,7 @@ class KoopmanTrainer:
         
         self.best_val_loss = float('inf')
 
-    @torch.compile(mode="reduce-overhead")
+    # @torch.compile(mode="reduce-overhead")
     def rollout(self, z, x_init, U, E, steps: int):
         B_batch, Dz = z.shape
         Dx = x_init.shape[-1]
@@ -45,7 +45,8 @@ class KoopmanTrainer:
         forcing_net = self.models['forcing_net'] if 'forcing_net' in self.models else None
 
         # Pre-allocate the entire output tensor
-        z_preds = torch.empty((B_batch, steps + 1, Dz + Dx), device=z.device, dtype=z.dtype)
+        d_rollout = Dz + Dx if self.concat_true else Dz
+        z_preds = torch.empty((B_batch, steps + 1, d_rollout), device=z.device, dtype=z.dtype)
         
         if self.concat_true:
             current_state = torch.cat([z, x_init], dim=-1)
@@ -57,7 +58,7 @@ class KoopmanTrainer:
         for i in range(steps):
             #  Linear step
             next_state = model_A(current_state)
-            
+
             #  Additive terms (Control/Forcing)
             if model_B is not None and U is not None:
                 next_state += model_B(U[:, i])
@@ -75,52 +76,6 @@ class KoopmanTrainer:
             
         return z_preds, v_r_list
 
-    @torch.compile(mode="reduce-overhead")
-    def rollout_solid(self, z, x_init, U, E, steps: int):
-        B_batch, Dz = z.shape
-        Dx = x_init.shape[-1]
-        
-        z_preds = torch.empty((B_batch, steps + 1, Dz + Dx), device=z.device, dtype=z.dtype)
-        
-        current_z = z
-        current_x = x_init
-        z_preds[:, 0] = torch.cat([current_z, current_x], dim=-1)
-
-        # FIX: Access ModuleDict correctly
-        model_A = self.models['A']
-        model_B = self.models['B'] if 'B' in self.models else None
-        model_E = self.models['E'] if 'E' in self.models else None
-        forcing_net = self.models['forcing_net'] if 'forcing_net' in self.models else None
-
-        v_r_list = []
-
-        for i in range(steps):
-
-            z_combined = torch.cat([current_z, current_x], dim=-1)
-            
-            # Apply Linear Dynamics
-            z_next_combined = model_A(z_combined)
-            
-            # Apply Control (B)
-            if model_B is not None and U is not None:
-                z_next_combined = z_next_combined + model_B(U[:, i])
-            
-            # Apply External Forcing (E)
-            if model_E is not None and E is not None:
-                z_next_combined = z_next_combined + model_E(E[:, i])
-                
-            # Apply Internal Forcing (HAVOK)
-            if forcing_net is not None:
-                v = forcing_net(z_combined)
-                v_r_list.append(v)
-                z_next_combined = z_next_combined + v
-                
-            current_z = z_next_combined[:, :Dz]
-            current_x = z_next_combined[:, Dz:] 
-            
-            z_preds[:, i + 1] = z_next_combined
-            
-        return z_preds, v_r_list
 
     def forward_logic(self, X, U, E, is_train=True, monitor_time = True):
         B, T, Dx = X.shape
@@ -146,12 +101,15 @@ class KoopmanTrainer:
             t2 = time.time()
         z_preds, v_r = self.rollout(z_enc[:, 0], x_win[:, 0], u_eff, e_win, steps=h)
 
-        # BATCHED DECODING (The Speedup)
-        # Combine both paths into one large batch for the decoder
-        z_vae_combined = torch.cat([z_enc, x_win], dim=-1) # [B, h+1, Dz+Dx]
-        
+         # BATCHED DECODING 
+        if self.concat_true:
+            z_vae_combined = torch.cat([z_enc, x_win], dim=-1)
+        else:
+            z_vae_combined = z_enc
+    
+        # BATCHED DECODING 
         # Flatten both to [Batch * Time, Dim] and stack
-        # Shape: [2 * B * (h+1), Dz+Dx]
+        # Shape: [2 * B * (h+1), D_latent]
         combined_latents = torch.cat([
             z_preds.reshape(-1, z_preds.shape[-1]),
             z_vae_combined.reshape(-1, z_vae_combined.shape[-1])
@@ -256,7 +214,7 @@ class KoopmanTrainer:
             t0 = time.time()
 
         self.models.train()
-        with torch.amp.autocast('cuda', dtype=torch.float16):
+        with torch.amp.autocast('cuda', dtype=torch.float32):
             res = self.forward_logic(X, U, E, is_train=True)
             if monitor_time:
                 t1 = time.time()
@@ -364,6 +322,21 @@ class KoopmanTrainer:
                     self.monitor.save_checkpoint(self.models, epoch, is_best=is_best)
 
     def encode_states(self, X):
+        """
+        Universal encoder call. 
+        X is always [B, T, D]. The internal backbone handles the dimensionality.
+        """
+        mu, logstd = self.models['encoder'](X)
+        
+        if self.stochastic and self.models['encoder'].stochastic:
+            std = torch.exp(logstd)
+            z = mu + torch.randn_like(std) * std
+        else:
+            z = mu
+            
+        return z, mu, logstd
+
+    def encode_states_single(self, X):
         B, T, D = X.shape
         mu, logstd = self.models['encoder'](X.reshape(-1, D))
         

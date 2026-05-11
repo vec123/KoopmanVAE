@@ -36,19 +36,22 @@ class TimeSeriesProcessor:
 
 class ScalingProcessor:
     def __init__(self):
+        from sklearn.preprocessing import StandardScaler
         self.x_scaler = StandardScaler()
         self.u_scaler = StandardScaler()
         self.f_scaler = StandardScaler()
         self.is_fitted = False
 
     def fit(self, x_data, u_data=None, f_data=None):
-        
+        # Always fit X
         self.x_scaler.fit(x_data)
         
-        if u_data is not None and u_data.shape[1] > 0:
+        # Check if u_data is a valid array with features
+        if u_data is not None and len(u_data.shape) > 1 and u_data.shape[1] > 0:
             self.u_scaler.fit(u_data)
             
-        if f_data is not None and f_data.shape[1] > 0:
+        # Check if f_data is a valid array with features
+        if f_data is not None and len(f_data.shape) > 1 and f_data.shape[1] > 0:
             self.f_scaler.fit(f_data)
             
         self.is_fitted = True
@@ -59,8 +62,8 @@ class ScalingProcessor:
         
         x_scaled = self.x_scaler.transform(x)
         
-        # Scale u/f only if they have width > 0
-        u_scaled = self.u_scaler.transform(u) if (u is not None and u.shape[1] > 0) else u
-        f_scaled = self.f_scaler.transform(f) if (f is not None and f.shape[1] > 0) else f
+        # Check shapes before transforming to avoid sklearn errors on empty features
+        u_scaled = self.u_scaler.transform(u) if (u is not None and u.shape[-1] > 0) else u
+        f_scaled = self.f_scaler.transform(f) if (f is not None and f.shape[-1] > 0) else f
         
         return x_scaled, u_scaled, f_scaled

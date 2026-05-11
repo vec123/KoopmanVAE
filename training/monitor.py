@@ -6,6 +6,7 @@ import threading
 import pandas as pd
 from multiprocessing import Process
 from dataclasses import asdict
+import random
 
 import matplotlib
 matplotlib.use('Agg') # Essential for background processes
@@ -74,19 +75,26 @@ class KoopmanMonitor:
         p = Process(target=self._exec_loss_plot_isolated, args=(df, self.run_dir))
         p.start()
 
+
     def plot_rollout(self, x_true, x_rec, epoch, prefix="val", **kwargs):
-        """Isolated Process for Rollout Plotting."""
-        # Move data to CPU in main thread before spawning process
+        """Isolated Process for Rollout Plotting with Random Sampling."""
+        # 1. Determine the batch size and pick a random index
+        batch_size = x_true.size(0)
+        idx = random.randint(0, batch_size - 1)
+        
+        # 2. Move only the selected random trajectory to CPU
         data = {
-            'x_true': x_true[0].detach().cpu().numpy(),
-            'x_rec': x_rec[0].detach().cpu().numpy(),
-            'u_true': kwargs['u_true'][0].detach().cpu().numpy() if kwargs.get('u_true') is not None else None,
-            'f_true': kwargs['f_true'][0].detach().cpu().numpy() if kwargs.get('f_true') is not None else None,
+            'x_true': x_true[idx].detach().cpu().numpy(),
+            'x_rec': x_rec[idx].detach().cpu().numpy(),
+            'u_true': kwargs['u_true'][idx].detach().cpu().numpy() if kwargs.get('u_true') is not None else None,
+            'f_true': kwargs['f_true'][idx].detach().cpu().numpy() if kwargs.get('f_true') is not None else None,
             'epoch': epoch,
             'prefix': prefix,
-            'plot_dir': self.plot_dir
+            'plot_dir': self.plot_dir,
+            'sample_idx': idx  # Useful to log which sample was picked
         }
         
+        # 3. Spawn the isolated plotting process
         p = Process(target=self._exec_rollout_isolated, args=(data,))
         p.start()
 

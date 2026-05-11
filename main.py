@@ -7,6 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from conf.config import KoopmanConfig, DataConfig, ModelDims, LossWeights, TrainConfig
 from models.models import KoopmanEncoder, LinearMatrix,ResidualMLP
+from models.model_factories import get_encoder, get_decoder, get_koopman_operator
 from models.model_inits import apply_system_init
 from training.engine import KoopmanTrainer
 from data.loader_factory import DataPipelineFactory
@@ -32,8 +33,10 @@ def main(cfg: DictConfig):
     # Data Pipeline
     # Hydra provides dot-notation (cfg.model.lr)
     # os.getenv handles the local machine infrastructure
-    dataset_path = os.getenv("DATASET_W_METEO_PATH")
-    
+    dataset_folder = os.getenv("DATASET_W_METEO_PATH")
+    dataset = koopman_cfg.data.dataset
+    print("dataset: ", dataset)
+    dataset_path = os.path.join(dataset_folder, dataset)
     if not dataset_path:
         raise ValueError("DATASET_PATH not found. Ensure your .env file is set up.")
     
@@ -49,7 +52,6 @@ def main(cfg: DictConfig):
 
 
     # Model Definitions (System Bundle)
-    # Using cfg.model for hyperparameters
     extended_state_dim = koopman_cfg.dims.state_dim + (len(koopman_cfg.data.cyclic_features) * 2)
     dx = extended_state_dim
     dz = koopman_cfg.dims.latent_dim
@@ -62,25 +64,13 @@ def main(cfg: DictConfig):
          d_total = dz
 
     system_bundle = {
-        'encoder': KoopmanEncoder(
-            state_dim=dx, 
-            latent_dim=dz, # Encoder only produces the abstract part
-            hidden_dim_int=cfg.model.get('hidden_dim', 64), 
-            hidden_depth=cfg.model.get('hidden_depth', 5)
-        ),
-        
+         'encoder': get_encoder(koopman_cfg, dx, dz),
+
         # Decoder must now accept the concatenated [z, x] vector
-        # 'decoder': LinearMatrix(
-        #     in_dim=d_total, 
-        #     out_dim=dx
-        # ),
-        'decoder':  ResidualMLP(d_total, dx, [cfg.model.get('hidden_dim', 64)]*cfg.model.get('hidden_depth', 5)),
-        
+         'decoder': get_decoder(koopman_cfg, d_total, dx),
+   
         # The Koopman Operator (A) maps [z, x]_t -> [z, x]_t+1
-        'A': LinearMatrix(
-            in_dim=d_total,
-            out_dim=d_total
-        )
+        'A': get_koopman_operator(koopman_cfg, d_total)
     }
     
     apply_system_init(system_bundle, mode='gaussian')

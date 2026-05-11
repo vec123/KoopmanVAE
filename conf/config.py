@@ -3,6 +3,7 @@ from typing import List, Optional
 
 @dataclass(frozen=True)
 class DataConfig:
+    dataset: str
     state_cols: List[str]
     control_cols: List[str]
     forcing_cols: List[str]
@@ -40,6 +41,9 @@ class LossWeights:
 
 @dataclass(frozen=True)
 class TrainConfig:
+    encoder_type: str
+    decoder_type: str
+    operator_type: str
     batch_size: int = 64
     lr: float = 1e-3
     backend: str = 'torch'      # 'torch' or 'native'
@@ -54,6 +58,7 @@ class TrainConfig:
     stochastic: bool = True
     encode_control: bool = False
     concat_true: bool = True
+
 @dataclass(frozen=True)
 class KoopmanConfig:
     # Metadata
