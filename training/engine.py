@@ -33,8 +33,63 @@ class KoopmanTrainer:
         
         self.best_val_loss = float('inf')
 
-    # @torch.compile(mode="reduce-overhead")
+
+    #@torch.compile(mode="reduce-overhead", fullgraph=True)
+    #@torch.compile(mode="reduce-overhead")
     def rollout(self, z, x_init, U, E, steps: int):
+        B_batch, Dz = z.shape
+        Dx = x_init.shape[-1]
+        
+        # Pre-fetch models
+        model_A = self.models['A']
+        model_B = self.models['B'] if 'B' in self.models else None
+        model_E = self.models['E'] if 'E' in self.models else None
+        forcing_net = self.models['forcing_net'] if 'forcing_net' in self.models else None
+
+        # Hoist non-recursive projections (Massive speedup for large 'steps')
+        # Pre-calculating these allows for one large matrix multiply instead of 'steps' small ones.
+        b_term = model_B(U) if model_B is not None and U is not None else None
+        e_term = model_E(E) if model_E is not None and E is not None else None
+
+        # Pre-allocate all output tensors
+        d_rollout = Dz + Dx if self.concat_true else Dz
+        z_preds = torch.empty((B_batch, steps + 1, d_rollout), device=z.device, dtype=z.dtype)
+        
+        # Pre-allocate forcing terms instead of using a list
+        if forcing_net is not None:
+            # Assuming forcing_net output dim is same as state dim; adjust if different
+            v_preds = torch.empty((B_batch, steps, Dz), device=z.device, dtype=z.dtype)
+        else:
+            v_preds = None
+
+        # Initial state assignment
+        current_state = torch.cat([z, x_init], dim=-1) if self.concat_true else z
+        z_preds[:, 0] = current_state
+
+        # 4. Optimized Loop
+        for i in range(steps):
+            # Recursive step
+            next_state = model_A(current_state)
+
+            # Add pre-computed terms
+            if b_term is not None:
+                next_state += b_term[:, i]
+            if e_term is not None:
+                next_state += e_term[:, i]
+                
+            # Forcing net (This must stay inside as it's state-dependent)
+            if forcing_net is not None:
+                v = forcing_net(current_state)
+                v_preds[:, i] = v
+                next_state += v
+                
+            z_preds[:, i + 1] = next_state
+            current_state = next_state 
+            
+        return z_preds, v_preds
+
+    @torch.compile(mode="reduce-overhead", fullgraph=True)
+    def rollout_old(self, z, x_init, U, E, steps: int):
         B_batch, Dz = z.shape
         Dx = x_init.shape[-1]
         
@@ -110,6 +165,18 @@ class KoopmanTrainer:
         # BATCHED DECODING 
         # Flatten both to [Batch * Time, Dim] and stack
         # Shape: [2 * B * (h+1), D_latent]
+        if monitor_time:
+            t3 = time.time()
+        combined_latents = torch.stack([z_preds, z_vae_combined], dim=0)
+        # Decoder Call 
+        all_recs = self.models['decoder'](combined_latents) 
+        
+        # Extract (O(1) operation, no data movement)
+        x_rec_rollout_3d = all_recs[0]
+        x_rec_vae_3d     = all_recs[1]#
+        x_rec_rollout_flat = x_rec_rollout_3d.reshape(-1, Dx)
+        x_rec_vae_flat     = x_rec_vae_3d.reshape(-1, Dx)
+        """
         combined_latents = torch.cat([
             z_preds.reshape(-1, z_preds.shape[-1]),
             z_vae_combined.reshape(-1, z_vae_combined.shape[-1])
@@ -124,7 +191,7 @@ class KoopmanTrainer:
         split_idx = B * (h + 1)
         x_rec_rollout_flat = all_recs[:split_idx]
         x_rec_vae_flat = all_recs[split_idx:]
-        
+        """
         if monitor_time:
             t4 = time.time()
         # 5. Control Loss

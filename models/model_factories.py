@@ -79,7 +79,8 @@ def get_koopman_operator(cfg, d_total):
         #bb_type = getattr(cfg.train, 'dynamic_backbone_type', 'mlp')
         bb_type = "mlp"
         if bb_type == 'mlp':
-            backbone = ResidualMLP(d_total, hidden, [hidden] * 2)
+            hidden = 128
+            backbone = ResidualMLP(d_total, hidden, [hidden] * 4)
             feat_dim = hidden
         elif bb_type == 'transformer':
             backbone = TransformerBackbone(d_total, d_model=hidden)
@@ -104,3 +105,32 @@ def get_koopman_operator(cfg, d_total):
 
     else:
         raise ValueError(f"Unknown operator type: {m_type}")
+
+
+def get_forcing_net(cfg, d_total):
+    """
+    Modular Factory for switching forcing network strategies.
+    """
+    m_type = cfg.train.forcing_net
+    hidden = cfg.dims.hidden_dim
+    depth = cfg.dims.hidden_depth
+    if m_type == "resmlp":
+         return ResidualMLP(
+            in_dim=d_total, 
+            out_dim=d_total, 
+            hidden_channels=[32] * 2
+        )
+    elif m_type == "botllenecked-resmlp":
+         return  BottleneckedResidualMLP(
+            in_dim=d_total, 
+            out_dim=d_total, 
+            hidden_channels=[12] * 2,
+            bottleneck_dim=2
+        )
+    elif m_type == "linear":
+         return  LinearMatrix(
+            in_dim=d_total, 
+            out_dim=d_total, 
+        )
+    else:
+        raise ValueError(f"Unknown forcing net type: {m_type}")

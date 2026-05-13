@@ -7,7 +7,7 @@ from omegaconf import DictConfig, OmegaConf
 
 from conf.config import KoopmanConfig, DataConfig, ModelDims, LossWeights, TrainConfig
 from models.models import KoopmanEncoder, LinearMatrix,ResidualMLP
-from models.model_factories import get_encoder, get_decoder, get_koopman_operator
+from models.model_factories import get_encoder, get_decoder, get_koopman_operator, get_forcing_net
 from models.model_inits import apply_system_init
 from training.engine import KoopmanTrainer
 from data.loader_factory import DataPipelineFactory
@@ -73,7 +73,7 @@ def main(cfg: DictConfig):
         'A': get_koopman_operator(koopman_cfg, d_total)
     }
     
-    apply_system_init(system_bundle, mode='gaussian')
+    apply_system_init(system_bundle, mode='gaussian', koopman_cfg=koopman_cfg)
 
     # Control Logic
     if koopman_cfg.train.encode_control:
@@ -97,10 +97,19 @@ def main(cfg: DictConfig):
         system_bundle['B'] = LinearMatrix(du, d_total)
 
 
-
-    # 3. External Forcing (Weather)
+    # External Forcing (Weather)
     if koopman_cfg.dims.forcing_dim > 0:
         system_bundle['E'] = LinearMatrix(koopman_cfg.dims.forcing_dim, d_total)
+
+    # Internal Forcing - accounts for continous spectrum of unmodeled dynamics (HAVOK-style)
+
+    if koopman_cfg.train.use_forcing:
+        system_bundle['forcing_net'] = get_forcing_net(koopman_cfg, dz)
+
+
+    #Compile model
+   # system_bundle['A'] = torch.compile(system_bundle['A'], mode="reduce-overhead")
+
     # Initialize Trainer
     # engine expects an object with .lr, .horizon, etc. 
     trainer = KoopmanTrainer(

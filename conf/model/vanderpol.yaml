@@ -1,7 +1,6 @@
 # --- Experiment Metadata ---
 exp_name: "koopman_exp"
-checkpoint_dir: "./checkpoints"
-dataset: "csv/vanderpol"
+checkpoint_dir: "./checkpoints/vanderpol_single"
 
 # --- Model Architecture ---
 dims:
@@ -10,12 +9,12 @@ dims:
   control_dim: 0
   forcing_dim: 0
   hidden_dim: 128
-  hidden_depth: 8
+  hidden_depth: 6
 
 # --- Data Pipeline ---
 data:
-  dataset: "csv/vanderpol"
-  subseq_len: 200
+  dataset: "csv/vanderpol_dt_0.1_single"
+  subseq_len: 300
   stride: 10
   cyclic_features: [] #
   state_cols: ['$x$', '$\dot{x}$']
@@ -32,6 +31,8 @@ train:
   encoder_type: resmlp
   decoder_type: resmlp     # or "linear"
   operator_type: learnable_complex_diag
+  use_forcing: false
+  forcing_net: resmlp
   lr: 1e-3
   batch_size: 128
   backend: 'torch'
@@ -41,7 +42,7 @@ train:
   save_interval: 100
   min_entropy_threshold: 1.0
   device: 'cuda'
-  horizon: 150
+  horizon: 50
   plot_forcing_mode: "dimensions"
   stochastic: False
   encode_control: False
@@ -51,7 +52,7 @@ train:
 weights:
   gamma_1: 10.0        # Koopman Consistency: ||z_pred - z_enc||
   gamma_2: 10.0        # State Reconstruction: ||x_pred - x_true||
-  rollout_decay: 0.9
+  rollout_decay: 1.0
   epsilon_1: 10.0      # Encoder Decoder Reconstruction init
   epsilon_2: 10.0     # Encoder Decoder Reconstruction all
   beta_kl: 0.0     # KL Divergence: Latent regularization
@@ -60,4 +61,4 @@ weights:
   delta_spec: 0.0  # Spectral Penalty: Stability (eigs <= 1)
   zero_gain: 0.0      # Zero-State: Physical origin mapping
   epsilon_3: 0.0      # Control Reconstruction
-  lambda_forcing: 0.1 # Forcing Regularization (HAVOK v_r)
+  lambda_forcing: 0.0 # Forcing Regularization (HAVOK v_r)

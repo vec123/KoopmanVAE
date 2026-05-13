@@ -8,14 +8,14 @@ dims:
   latent_dim: 32
   control_dim: 0
   forcing_dim: 0
-  hidden_dim: 128
+  hidden_dim: 64
   hidden_depth: 8
 
 # --- Data Pipeline ---
 data:
-  dataset: "csv/lorenz"
-  subseq_len: 200
-  stride: 10
+  dataset: "csv/lorenz_dt_0.1_few"
+  subseq_len: 80
+  stride: 1
   cyclic_features: [] #
   state_cols: ['$x$', '$y$', '$z$']
   control_cols: []
@@ -31,16 +31,18 @@ train:
   encoder_type: resmlp
   decoder_type: resmlp     # or "linear"
   operator_type: learnable_complex_diag
-  lr: 1e-3
+  use_forcing: true
+  forcing_net: linear
+  lr: 5e-4
   batch_size: 128
   backend: 'torch'
-  use_ema: true
+  use_ema: false
   ema_decay: 1
-  val_interval: 10
-  save_interval: 10
+  val_interval: 100
+  save_interval: 100
   min_entropy_threshold: 1.0
   device: 'cuda'
-  horizon: 150
+  horizon: 45
   plot_forcing_mode: "dimensions"
   stochastic: False
   encode_control: False

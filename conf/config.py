@@ -44,6 +44,8 @@ class TrainConfig:
     encoder_type: str
     decoder_type: str
     operator_type: str
+    use_forcing: bool
+    forcing_net: str
     batch_size: int = 64
     lr: float = 1e-3
     backend: str = 'torch'      # 'torch' or 'native'

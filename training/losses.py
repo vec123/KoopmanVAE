@@ -118,12 +118,31 @@ def compute_spectral_penalty(A_module):
     return torch.relu(max_eig - 1.0)
 
 def compute_forcing_reg(v_r_list, device):
-    if not v_r_list:
-        return torch.tensor(0.0, device=device)
-    
-    v_r_tensor = torch.stack(v_r_list, dim=1)
+    """
+    Computes L1 and L2 regularization for forcing terms.
+    Handles list of Tensors or a single Tensor.
+    """
+    # Guard against None or empty structures
+    if v_r_list is None or (isinstance(v_r_list, (list, tuple)) and len(v_r_list) == 0):
+        return torch.tensor(0.0, device=device, requires_grad=True)
+
+    # Convert list of Tensors to a single Tensor
+    if isinstance(v_r_list, (list, tuple)):
+        # stack along time dimension (dim=1)
+        v_r_tensor = torch.stack(v_r_list, dim=1)
+    elif isinstance(v_r_list, torch.Tensor):
+        v_r_tensor = v_r_list
+    else:
+        raise TypeError(f"Expected list or Tensor, got {type(v_r_list)}")
+
+    v_r_tensor = v_r_tensor.to(device)
+
+    # Compute Norms
+    # l1: Sum of absolute values
+    # l2: Square root of sum of squares
     l1 = torch.norm(v_r_tensor, p=1, dim=-1).mean()
     l2 = torch.norm(v_r_tensor, p=2, dim=-1).mean()
+
     return l1 + 0.1 * l2
 
 def compute_entropy_loss(logstd, min_threshold=1.0):

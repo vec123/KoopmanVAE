@@ -103,7 +103,7 @@ SYSTEM_REGISTRY = {
             init_mean=[1.0, 0.0],
             init_range=[2.0, 1.0]
         ),
-        "config": {"dt": 0.05, "seq_len": 500, "substeps": 5, "u_scale": 0.0,  "u_time_scale": (1.0, 5.0)}
+        "config": {"dt": 0.1, "seq_len": 500, "substeps": 5, "u_scale": 0.0,  "u_time_scale": (1.0, 5.0)}
     },
 
     "lorenz": {
@@ -112,6 +112,6 @@ SYSTEM_REGISTRY = {
             init_mean=[1.0, 1.0, 20.0],
             init_range=[5.0, 5.0, 5.0]
         ),
-        "config": {"dt": 0.005, "seq_len": 10000, "substeps": 1, "u_scale": 0.0,  "u_time_scale": (0.1, 3.0)}
+        "config": {"dt": 0.001, "seq_len": 50000, "substeps": 1, "u_scale": 0.0,  "u_time_scale": (0.1, 3.0)}
     }
 }

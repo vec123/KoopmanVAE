@@ -156,46 +156,100 @@ class LinearQuadraticOperator(nn.Module):
 
     def forward(self, z):
         return self.linear_part(z) + self.quad_part(z)
+  
     
-
 class BlockDiagonal(nn.Module):
     def __init__(self, latent_dim):
+        """
+        A version where the block diagonal matrix A is constant (learned parameters),
+        rather than being predicted from the state z.
+        
+        latent_dim: The dimension of the Koopman state z.
+        """
         super().__init__()
-        self.dim = latent_dim
+        self.latent_dim = latent_dim
         self.n_blocks = latent_dim // 2
         self.has_real_tail = (latent_dim % 2 != 0)
         
-        # Initialize as identity-ish (a=1, b=0)
-        self.a = nn.Parameter(torch.ones(self.n_blocks))
-        self.b = nn.Parameter(torch.zeros(self.n_blocks))
+       
+        self.complex_params = nn.Parameter(torch.randn(self.n_blocks, 2) * 0.1)
         
         if self.has_real_tail:
-            self.real_lambda = nn.Parameter(torch.ones(1))
+            self.real_param = nn.Parameter(torch.randn(1) * 0.1)
 
     def forward(self, z):
-        # z: [Batch, latent_dim]
+        # We apply a constraint (like tanh) to ensure stability if needed
+        # This mirrors your original logic: params = torch.tanh(params)
+        params = torch.tanh(self.complex_params)
+        a = params[:, 0] # Shape: (n_blocks)
+        b = params[:, 1] # Shape: (n_blocks)
+        
+        # Prepare z: shape (Batch, n_blocks, 2)
         z_vecs = z[:, :self.n_blocks*2].view(-1, self.n_blocks, 2)
+        z1, z2 = z_vecs[..., 0], z_vecs[..., 1]
         
-        # Broadcasting parameters across the batch
-        # a, b are [n_blocks], we unsqueeze to [1, n_blocks, 1]
-        a = self.a.view(1, -1, 1)
-        b = self.b.view(1, -1, 1)
+        # Complex multiplication: (a + ib)(z1 + iz2)
+        # Real: a*z1 - b*z2 | Imag: b*z1 + a*z2
+        # Note: I adjusted the signs to match standard complex multiplication 
+        # (Your original had res_real = a*z1 + b*z2, which is fine if intended)
+        res_real = a * z1 - b * z2
+        res_imag = b * z1 + a * z2
         
-        z1 = z_vecs[..., 0:1]
-        z2 = z_vecs[..., 1:2]
-        
-        res_1 = a * z1 + b * z2
-        res_2 = -b * z1 + a * z2
-        
-        out_main = torch.cat([res_1, res_2], dim=-1).view(z.shape[0], -1)
+        # Flatten and Concat
+        out_main = torch.stack([res_real, res_imag], dim=-1).flatten(1)
         
         if self.has_real_tail:
-            res_tail = z[:, -1:] * self.real_lambda
-            return torch.cat([out_main, res_tail], dim=-1)
+            tail = z[:, -1:] * torch.tanh(self.real_param)
+            return torch.cat([out_main, tail], dim=-1)
         
         return out_main
     
 
+class LearnableComplexBlockDiagonal_v2(nn.Module):
+       
+    def __init__(self, backbone, feature_dim, latent_dim):
+        """
+        backbone: A network (MLP) that maps z -> features.
+        feature_dim: The output size of the backbone.
+        latent_dim: The dimension of the Koopman state z.
+        """
+        super().__init__()
+        self.backbone = backbone
+        self.n_blocks = latent_dim // 2
+        self.has_real_tail = (latent_dim % 2 != 0)
+        
+        # Maps backbone features to the (a, b) entries of the blocks
+        self.n_params = (self.n_blocks * 2) + (1 if self.has_real_tail else 0)
+        self.param_head = nn.Linear(feature_dim, self.n_params)
+
+    def forward(self, z):
+            # Run backbone and head
+            features = self.backbone(z)
+            params = self.param_head(features) 
+            params = torch.tanh(params) * 1
+
+            # Vectorized Complex Math (Highly "Fusable" for Inductor)
+            # We use reshape + view_as_complex to avoid the overhead of manual stacking
+            z_main = z[:, :self.n_blocks*2].reshape(-1, self.n_blocks, 2)
+            p_main = params[:, :self.n_blocks*2].reshape(-1, self.n_blocks, 2)
+            
+            # view_as_complex requires the tensor to be contiguous
+            z_c = torch.view_as_complex(z_main.contiguous())
+            p_c = torch.view_as_complex(p_main.contiguous())
+            
+            # This single line replaces all the manual res_real/res_imag logic
+            out_c = z_c * p_c 
+            
+            out_main = torch.view_as_real(out_c).flatten(1)
+            
+            #  Handle the real tail if it exists
+            if self.has_real_tail:
+                # params[:, -1:] maps the last param to the last state element
+                tail = z[:, -1:] * params[:, -1:]
+                return torch.cat([out_main, tail], dim=-1)
+                
+            return out_main
+    
 class LearnableComplexBlockDiagonal(nn.Module):
        
     def __init__(self, backbone, feature_dim, latent_dim):
@@ -214,25 +268,25 @@ class LearnableComplexBlockDiagonal(nn.Module):
         self.param_head = nn.Linear(feature_dim, self.n_params)
 
     def forward(self, z):
-            # 1. Faster Backbone Inference
+            # Backbone Inference
             features = self.backbone(z)
             params = self.param_head(features) 
+            params = torch.tanh(params) * 1
 
-            # 2. Extract and Broadcast
+            # Extract and Broadcast
             # Instead of multiple views, use one split
             p_blocks = params[:, :self.n_blocks*2].view(-1, self.n_blocks, 2)
             a, b = p_blocks[..., 0], p_blocks[..., 1]
             
-            # 3. Explicit Vectorized Multiplication (Faster for Inductor)
+            # Explicit Vectorized Multiplication (Faster for Inductor)
             z_vecs = z[:, :self.n_blocks*2].view(-1, self.n_blocks, 2)
             z1, z2 = z_vecs[..., 0], z_vecs[..., 1]
             
             # (a + ib)(z1 + iz2) 
-            # Using unsqueeze here avoids the stack/view overhead in some versions
             res_real = a * z1 + b * z2
             res_imag = -b * z1 + a * z2
             
-            # 4. Flatten and Concat
+            # Flatten and Concat
             out_main = torch.stack([res_real, res_imag], dim=-1).flatten(1)
             
             if self.has_real_tail:
@@ -242,52 +296,6 @@ class LearnableComplexBlockDiagonal(nn.Module):
             return out_main
 
 
-class LearnableComplexBlockDiagonal_(nn.Module):
-       
-    def __init__(self, backbone, feature_dim, latent_dim):
-        """
-        backbone: A network (MLP) that maps z -> features.
-        feature_dim: The output size of the backbone.
-        latent_dim: The dimension of the Koopman state z.
-        """
-        super().__init__()
-        self.backbone = backbone
-        self.n_blocks = latent_dim // 2
-        self.has_real_tail = (latent_dim % 2 != 0)
-        
-        # Maps backbone features to the (a, b) entries of the blocks
-        self.n_params = (self.n_blocks * 2) + (1 if self.has_real_tail else 0)
-        self.param_head = nn.Linear(feature_dim, self.n_params)
-
-    def forward(self, z):
-        # 1. Generate the matrix entries D(z)
-        features = self.backbone(z)
-        params = self.param_head(features) 
-
-        # 2. Extract a(z) and b(z) for each 2x2 block
-        p_blocks = params[:, :self.n_blocks*2].view(-1, self.n_blocks, 2)
-        a = p_blocks[..., 0:1] # Real part (Stability/Damping)
-        b = p_blocks[..., 1:2] # Imaginary part (Frequency)
-
-        # 3. Apply D(z) to z
-        # Reshape z to [Batch, n_blocks, 2] to match the blocks
-        z_vecs = z[:, :self.n_blocks*2].view(-1, self.n_blocks, 2)
-        z1, z2 = z_vecs[..., 0:1], z_vecs[..., 1:2]
-        
-        # Local transformation: [a(z)  b(z)] [z1]
-        #                      [-b(z) a(z)] [z2]
-        res_1 = a * z1 + b * z2
-        res_2 = -b * z1 + a * z2
-        
-        # 4. Interleave back to [Batch, latent_dim]
-        # Using stack + view is the most stable for torch.compile
-        out_main = torch.stack([res_1, res_2], dim=-1).view(z.shape[0], -1)
-        
-        if self.has_real_tail:
-            res_tail = z[:, -1:] * params[:, -1:]
-            return torch.cat([out_main, res_tail], dim=-1)
-        
-        return out_main
 
     
 #-----------------------A Tensor Train Model
