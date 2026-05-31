@@ -27,9 +27,7 @@ This framework enables learning of dynamical systems from data with applications
 - **Multi-System Support**: Pre-configured systems including:
   - Lorenz attractor
   - Duffing oscillator
-  - Cartpole
   - Van der Pol oscillator
-  - HVAC systems (linear and nonlinear)
   - Inverted pendulum
   - Coupled mass systems
 
