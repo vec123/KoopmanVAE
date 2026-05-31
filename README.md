@@ -40,7 +40,7 @@ KoopmanVAE System Bundle:
 ├── Encoder: State → Latent space (outputs μ, log-σ for VAE)
 ├── Decoder: Latent/Concatenated space → State reconstruction
 ├── Koopman Operator (A): Learns linear transition in latent space [z, x]_t → [z, x]_{t+1}
-├── Forcing Network: Learns sparse forcing functions (HAVOK framework)
+├── Forcing Network: Learns sparse forcing functions
 ├── Control Encoder: (Optional) Encodes control inputs to latent dimension
 ├── Control Decoder: (Optional) Decodes latent control back to action space
 └── Control Matrix (B): Maps control to state transitions
